@@ -16,6 +16,18 @@ const P2P = {
   ALPHABET: 'ABCDEFGHJKMNPQRSTUVWXYZ23456789',
   loading: null,
 
+  // Serveurs STUN : ils aident deux navigateurs à se trouver à travers leurs box.
+  // (Les relais TURN fournis par défaut avec PeerJS n'existent plus.)
+  STUN: [
+    { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    { urls: 'stun:stun.cloudflare.com:3478' },
+  ],
+  // Relais TURN : indispensables quand une connexion directe est impossible
+  // (4G/5G, certains réseaux d'entreprise). À remplir avec les identifiants
+  // d'un service TURN, ex. { urls: 'turn:…:3478', username: '…', credential: '…' }.
+  TURN: [],
+  iceConfig() { return { iceServers: this.STUN.concat(this.TURN) }; },
+
   /** Charge la bibliothèque PeerJS à la demande (il faut une connexion Internet). */
   load() {
     if (window.Peer) return Promise.resolve(window.Peer);
@@ -66,7 +78,8 @@ const P2P = {
   async openPeer(id) {
     const Peer = await this.load();
     return new Promise((resolve, reject) => {
-      const p = id ? new Peer(id, { debug: 0 }) : new Peer({ debug: 0 });
+      const opts = { debug: 0, config: this.iceConfig() };
+      const p = id ? new Peer(id, opts) : new Peer(opts);
       const timer = setTimeout(() => { done(); p.destroy(); reject(new Error('Le service de mise en relation ne répond pas. Vérifiez votre connexion Internet.')); }, 15000);
       const onOpen = () => { done(); resolve(p); };
       const onErr = (e) => { done(); p.destroy(); reject(e); };
@@ -94,17 +107,31 @@ const P2P = {
     try { return await this.openPeer(null); } catch (e) { throw this.friendly(e); }
   },
 
+  /** Message quand les deux navigateurs se voient mais ne parviennent pas à se relier. */
+  NAT_MSG: 'Votre navigateur a bien trouvé la table, mais vos deux connexions Internet n’arrivent pas à se relier directement '
+    + '(fréquent en 4G/5G ou sur certains réseaux). Essayez avec les deux appareils en Wi-Fi.',
+
   /** Connexion directe d'un invité à la table de code `code`. */
   dial(peer, code) {
     return new Promise((resolve, reject) => {
       const conn = peer.connect(this.hostId(code), { reliable: true, serialization: 'json' });
-      const timer = setTimeout(() => { done(); conn.close(); reject(new Error('L’hôte ne répond pas. Vérifiez le code ou réessayez.')); }, 15000);
-      const onErr = (e) => {
-        if (e && e.type === 'peer-unavailable') { done(); reject(new Error(`Aucune table ouverte avec le code ${code}.`)); }
+      // L'hôte a répondu (sa description de connexion est arrivée) mais le lien direct n'aboutit pas
+      const natFailed = () => {
+        try {
+          const pc = conn.peerConnection;
+          return !!pc && (!!pc.remoteDescription || ['checking', 'failed', 'disconnected'].includes(pc.iceConnectionState));
+        } catch (e) { return false; }
       };
+      const fail = (msg) => { done(); try { conn.close(); } catch (e) { /* ignore */ } reject(new Error(msg)); };
+      const timer = setTimeout(() => fail(natFailed() ? this.NAT_MSG : 'L’hôte ne répond pas. Vérifiez le code ou réessayez.'), 25000);
+      const onErr = (e) => {
+        if (e && e.type === 'peer-unavailable') fail(`Aucune table ouverte avec le code ${code}.`);
+      };
+      const onConnErr = () => fail(this.NAT_MSG); // échec de la négociation (ICE « failed »)
       const onOpen = () => { done(); resolve(conn); };
-      function done() { clearTimeout(timer); peer.off('error', onErr); conn.off('open', onOpen); }
+      function done() { clearTimeout(timer); peer.off('error', onErr); conn.off('open', onOpen); conn.off('error', onConnErr); }
       peer.on('error', onErr);
+      conn.on('error', onConnErr);
       conn.on('open', onOpen);
     });
   },
@@ -460,6 +487,7 @@ const Net = (() => {
     dropJoinSession();
     $('#netJoinName').value = savedName();
     $('#netJoinCode').value = code ? P2P.normalize(code) : '';
+    $('#netJoinError').hidden = true;
     joinStep(1);
     $('#netJoinDlg').showModal();
     if (code && savedName()) $('#netJoinConnect').focus();
@@ -475,6 +503,7 @@ const Net = (() => {
     if (code.length < 4) { toast('Entrez le code de la table que votre ami vous a donné.'); $('#netJoinCode').focus(); return; }
     btn.disabled = true;
     btn.textContent = 'Connexion…';
+    $('#netJoinError').hidden = true;
     dropJoinSession();
     try {
       const peer = await P2P.openGuest();
@@ -490,7 +519,9 @@ const Net = (() => {
       conn.send({ t: 'hello' });
     } catch (e) {
       dropJoinSession();
-      toast(e.message || 'Connexion impossible.');
+      const err = $('#netJoinError');
+      err.textContent = e.message || 'Connexion impossible.';
+      err.hidden = false;
     } finally {
       btn.disabled = false;
       btn.textContent = 'Se connecter';
