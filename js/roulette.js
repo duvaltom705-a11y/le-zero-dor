@@ -306,7 +306,7 @@ const Wheel = (() => {
         ball.r = POCKET;
         const done = spin.onDone;
         spin = null;
-        setTimeout(done, 450);
+        if (done) setTimeout(done, 450);
       } else {
         pos = ballDuringSpin(t, dt, w);
       }
@@ -319,10 +319,11 @@ const Wheel = (() => {
 
   /**
    * Lance le cylindre et la bille. Le numéro `result` est déjà tiré :
-   * on choisit aléatoirement tous les paramètres physiques, puis on ajuste
+   * on choisit aléatoirement les paramètres physiques, puis on ajuste
    * la vitesse de lancer pour que la bille finisse exactement dans sa case.
+   * `opt.Ta` / `opt.Tb` imposent les durées (identiques pour tous les joueurs d'une table).
    */
-  function launch(result, onDone) {
+  function launch(result, opt = {}) {
     const t0 = now();
     const w0 = mod(angleAt(t0), TAU);
     const restingAngle = w0 + ball.rel;
@@ -330,8 +331,8 @@ const Wheel = (() => {
 
     const r0 = ball.visible ? ball.r : TRACK;
     const b0 = ball.visible ? mod(restingAngle, TAU) : RNG.range(0, TAU);
-    const Ta = RNG.range(4.2, 5.4);      // durée sur la piste
-    const Tb = RNG.range(2.1, 2.8);      // durée de la chute et des rebonds
+    const Ta = opt.Ta || RNG.range(4.2, 5.4); // durée sur la piste
+    const Tb = opt.Tb || RNG.range(2.1, 2.8); // durée de la chute et des rebonds
     const wb1 = RNG.range(2.4, 3.2);     // vitesse de la bille au moment de la chute
     const wb0Base = RNG.range(8.5, 10.5);
     const beta = RNG.range(0.4, 0.55);   // forme du freinage final
@@ -354,36 +355,57 @@ const Wheel = (() => {
       jA: RNG.range(0.12, 0.3) * (RNG.int(2) ? 1 : -1),
       jN: 2 + RNG.int(3),
       bN: 3 + RNG.int(3),
-      onDone,
+      onDone: opt.onDone || null,
     };
     ball.visible = true;
   }
+
+  /** Pose directement la bille dans la case `result` (fin d'animation forcée). */
+  function place(result) {
+    spin = null;
+    ball.visible = true;
+    ball.r = POCKET;
+    ball.rel = WHEEL_ORDER.indexOf(result) * SEG;
+  }
+  /** Termine l'animation en cours (onglet en arrière-plan, arrivée en cours de tour…). */
+  function finish(result) {
+    if (spin && spin.P === WHEEL_ORDER.indexOf(result) * SEG) {
+      ball.rel = mod(spin.P, TAU);
+      ball.r = POCKET;
+      spin = null;
+      return;
+    }
+    place(result);
+  }
+  const spinning = () => !!spin;
 
   function reset() {
     spin = null;
     ball.visible = false;
   }
 
-  return { launch, reset, resize };
+  return { launch, place, finish, spinning, reset, resize };
 })();
 
 // ---------------------------------------------------------------
-// État du jeu
+// Table : en solo (dans ce navigateur) ou entre amis (hôte / invité)
+// Le moteur (roulette-core.js) fait tourner les tours tout seul.
 // ---------------------------------------------------------------
-// Le solde disponible est celui du portefeuille du casino (Wallet.balance).
-const state = {
-  phase: 'closed', // 'betting' | 'spinning' | 'closed' (hors de la roulette)
-  bets: new Map(), // clé de mise → montant
-  undo: [],
-  lastBets: null,
-  round: null,
-  settle: null,    // affichage des mises gagnantes/perdantes après un tour
-  chip: 5,
-  history: [],
-  lastNet: null,
-};
-let settleTimer = 0;
+const RC = RouletteCore;
+let ctrl = null;      // { mode: 'solo' | 'host' | 'guest', send(m), leave() → Promise<{ stack } | { error }> }
+let view = null;      // dernier état reçu
+let soloTable = null; // la table solo garde son historique d'une visite à l'autre
+let chip = 5;
+let animSpin = -1;    // dernier tirage animé
+let revealed = -1;    // dernier tirage annoncé
+let shownNet = null;  // « Dernier coup » affiché
+let deadlineAt = 0;
+let ticker = 0;
 let bustTimer = 0;
+let bustShown = false;
+
+const meOf = (v) => (v && v.you >= 0 ? v.players[v.you] : null);
+const isNet = () => !!ctrl && ctrl.mode !== 'solo';
 
 // ---------------------------------------------------------------
 // Tapis de jeu
@@ -391,7 +413,8 @@ let bustTimer = 0;
 const board = $('#board');
 const spots = new Map();
 const numberCells = [];
-const chipEls = new Map();
+const chipEls = new Map();   // mes jetons : clé → élément
+const otherEls = new Map();  // jetons des autres joueurs : « clé|place » → élément
 
 function el(tag, cls, html) {
   const e = document.createElement(tag);
@@ -402,6 +425,7 @@ function el(tag, cls, html) {
 
 function addSpot(node, numbers, label, opts = {}) {
   const key = opts.key || 'n:' + [...numbers].sort((a, b) => a - b).join('-');
+  if (!RC.SPOTS.has(key)) console.warn('Mise inconnue du moteur :', key);
   spots.set(key, { key, numbers, label, even: !!opts.even, el: node });
   node.dataset.key = key;
 }
@@ -444,7 +468,6 @@ function buildBoard() {
     area.append(e);
     addSpot(e, nums, label);
   };
-  const by = (a, b) => a - b;
   for (let c = 0; c < 11; c++) for (let r = 0; r < 3; r++) {
     const n = numAt(c, r);
     hot('split', (c + 1) * CW, (r + 0.5) * CH, VW, VH, [n, n + 3], `Cheval ${n}/${n + 3}`);
@@ -469,7 +492,7 @@ function buildBoard() {
   for (let r = 0; r < 3; r++) {
     hot('split', 0, (r + 0.5) * CH, VW, VH, [0, 3 - r], `Cheval 0/${3 - r}`);
   }
-  hot('corner', 0, CH, VW, HH, [0, 2, 3].sort(by), 'Transversale 0/2/3');
+  hot('corner', 0, CH, VW, HH, [0, 2, 3], 'Transversale 0/2/3');
   hot('corner', 0, 2 * CH, VW, HH, [0, 1, 2], 'Transversale 0/1/2');
   hot('corner', 0, 100, VW, HH, [0, 1, 2, 3], 'Carré 0/1/2/3');
 
@@ -550,7 +573,7 @@ function buildChips() {
 }
 function markChip() {
   for (const b of chipsEl.children) {
-    const on = Number(b.dataset.value) === state.chip;
+    const on = Number(b.dataset.value) === chip;
     b.classList.toggle('selected', on);
     b.setAttribute('aria-checked', String(on));
   }
@@ -558,196 +581,105 @@ function markChip() {
 chipsEl.addEventListener('click', (e) => {
   const b = e.target.closest('.chip');
   if (!b) return;
-  state.chip = Number(b.dataset.value);
+  chip = Number(b.dataset.value);
   markChip();
 });
 
+const safeColor = (c) => (/^#[0-9a-f]{6}$/i.test(String(c)) ? c : '#9aa0a6');
+const STATUS_CLS = { w: ' won', h: ' half', l: ' lost' };
+
 function renderChips() {
-  const src = state.settle ? state.settle.bets : state.bets;
-  for (const [key, node] of chipEls) {
-    if (!src.has(key)) { node.remove(); chipEls.delete(key); }
+  const v = view;
+  const mine = new Map();
+  const others = [];
+  if (v && Array.isArray(v.bets)) {
+    for (const b of v.bets) {
+      const [k, a, seat, st] = b;
+      if (!spots.has(k) || !(Number(a) > 0)) continue;
+      if (seat === v.you) mine.set(k, [Number(a), st]);
+      else others.push([k, Number(a), seat, st]);
+    }
   }
-  for (const [key, amount] of src) {
+  // Mes jetons
+  for (const [key, node] of chipEls) {
+    if (!mine.has(key)) { node.remove(); chipEls.delete(key); }
+  }
+  for (const [key, [amount, st]] of mine) {
     let node = chipEls.get(key);
     if (!node) {
       node = el('div');
       spots.get(key).el.append(node);
       chipEls.set(key, node);
     }
-    let cls = 'chip-stack ' + chipClass(amount);
-    if (state.settle) cls += state.settle.win.has(key) ? ' won' : state.settle.half.has(key) ? ' half' : ' lost';
-    node.className = cls;
+    node.className = 'chip-stack ' + chipClass(amount) + (STATUS_CLS[st] || '');
     node.textContent = shortAmount(amount);
   }
+  // Jetons de couleur des autres joueurs
+  const seenKeys = new Set();
+  const perSpot = new Map();
+  for (const [k, a, seat, st] of others) {
+    const p = v.players[seat];
+    if (!p) continue;
+    const id = `${k}|${seat}`;
+    seenKeys.add(id);
+    const idx = perSpot.get(k) || 0;
+    perSpot.set(k, idx + 1);
+    let node = otherEls.get(id);
+    if (!node) {
+      node = el('div');
+      spots.get(k).el.append(node);
+      otherEls.set(id, node);
+    }
+    node.className = 'chip-other' + (STATUS_CLS[st] || '');
+    node.style.setProperty('--pc', safeColor(p.color));
+    node.style.setProperty('--k', String(Math.min(idx, 4)));
+    node.title = `${p.name} : ${money(a)}`;
+    node.textContent = shortAmount(a);
+  }
+  for (const [id, node] of otherEls) {
+    if (!seenKeys.has(id)) { node.remove(); otherEls.delete(id); }
+  }
 }
 
 // ---------------------------------------------------------------
-// Mises
+// Actions du joueur (envoyées au moteur, ou à l'hôte)
 // ---------------------------------------------------------------
-function snapshot() {
-  state.undo.push(new Map(state.bets));
-  if (state.undo.length > 200) state.undo.shift();
-}
+function send(m) { if (ctrl) ctrl.send(m); }
 
+function canBet() {
+  const me = meOf(view);
+  if (!me) return false;
+  if (view.phase !== 'betting') { toast('Les jeux sont faits : attendez le prochain tour.'); return false; }
+  return true;
+}
 function placeBet(key) {
-  if (state.phase !== 'betting') return;
-  endSettle();
-  const amt = state.chip;
-  if (amt > Wallet.balance) {
-    toast(Wallet.balance >= 1 ? 'Solde insuffisant : choisissez un jeton plus petit.' : 'Solde insuffisant.');
+  if (!canBet()) return;
+  const me = meOf(view);
+  if (chip > me.stack + 1e-9) {
+    toast(me.stack >= 1 ? 'Solde insuffisant : choisissez un jeton plus petit.' : 'Solde insuffisant.');
     return;
   }
-  snapshot();
-  state.bets.set(key, (state.bets.get(key) || 0) + amt);
-  Wallet.take(amt);
   Sound.chip();
-  update();
-  showSpotInfo(key);
+  send({ t: 'bet', key, amount: chip });
 }
-
 function removeBet(key) {
-  if (state.phase !== 'betting') return;
-  endSettle();
-  if (!state.bets.has(key)) return;
-  snapshot();
-  Wallet.give(state.bets.get(key));
-  state.bets.delete(key);
-  update();
-  showSpotInfo(key);
-}
-
-function undo() {
-  if (state.phase !== 'betting' || !state.undo.length) return;
-  endSettle();
-  const prev = state.undo.pop();
-  Wallet.give(totalOf(state.bets) - totalOf(prev));
-  state.bets = prev;
-  update();
-}
-
-function clearBets() {
-  if (state.phase !== 'betting') return;
-  endSettle();
-  const t = totalOf(state.bets);
-  if (!t) return;
-  snapshot();
-  Wallet.give(t);
-  state.bets = new Map();
-  update();
-}
-
-function doubleBets() {
-  if (state.phase !== 'betting') return;
-  endSettle();
-  const t = totalOf(state.bets);
-  if (!t) return;
-  if (t > Wallet.balance) { toast('Solde insuffisant pour doubler.'); return; }
-  snapshot();
-  for (const [k, v] of state.bets) state.bets.set(k, v * 2);
-  Wallet.take(t);
-  Sound.chip();
-  update();
-}
-
-function rebet() {
-  if (state.phase !== 'betting') return;
-  endSettle();
-  if (!state.lastBets) { toast('Aucune mise précédente.'); return; }
-  const t = totalOf(state.lastBets);
-  if (t > Wallet.balance) { toast('Solde insuffisant pour remiser.'); return; }
-  snapshot();
-  for (const [k, v] of state.lastBets) state.bets.set(k, (state.bets.get(k) || 0) + v);
-  Wallet.take(t);
-  Sound.chip();
-  update();
+  if (!canBet()) return;
+  send({ t: 'unbet', key });
 }
 
 // ---------------------------------------------------------------
-// Tour de roulette
+// Annonces, résultat et compte à rebours
 // ---------------------------------------------------------------
-function spin() {
-  if (state.phase !== 'betting') return;
-  endSettle();
-  const total = totalOf(state.bets);
-  if (total <= 0) { toast('Posez au moins un jeton avant de lancer.'); return; }
-
-  state.phase = 'spinning';
-  state.round = { bets: new Map(state.bets), total };
-  state.undo = [];
-  clearWinner();
-  $('#resultBadge').hidden = true;
-  announce('Rien ne va plus', 'Les jeux sont faits');
-  update();
-
-  // Le tirage : générateur cryptographique, une fois les mises closes.
-  const result = RNG.int(37);
-  Wheel.launch(result, () => resolveRound(result));
-}
-
 function describe(n) {
   if (n === 0) return 'Zéro';
   return `${n} · ${RED.has(n) ? 'Rouge' : 'Noir'} · ${n % 2 ? 'Impair' : 'Pair'} · ${n <= 18 ? 'Manque' : 'Passe'}`;
 }
 
-function resolveRound(result) {
-  const { bets, total } = state.round;
-  let ret = 0;
-  const win = new Set();
-  const half = new Set();
-  for (const [key, amt] of bets) {
-    const s = spots.get(key);
-    if (s.numbers.includes(result)) {
-      ret += (amt * 36) / s.numbers.length; // mise + gain (35:1, 17:1, 11:1, 8:1, 5:1, 2:1, 1:1)
-      win.add(key);
-    } else if (result === 0 && s.even) {
-      ret += amt / 2; // la partage
-      half.add(key);
-    }
-  }
-  const net = ret - total;
-  Wallet.give(ret);
-  state.lastNet = net;
-  state.lastBets = bets;
-  state.bets = new Map();
-  state.round = null;
-  state.history.unshift(result);
-  state.settle = { bets, win, half };
-  state.phase = 'betting';
-
-  showBadge(result);
-  numberCells[result].classList.add('winner');
-
-  let sub, cls = '';
-  if (ret === 0) { sub = `Perdu ${signed(net)}`; cls = 'neg'; }
-  else if (net > 0) { sub = `Vous gagnez ${money(ret)} (${signed(net)})`; cls = 'pos'; }
-  else if (net < 0) { sub = `Vous récupérez ${money(ret)} (${signed(net)})`; cls = 'neg'; }
-  else sub = `Mise récupérée (${signed(0)})`;
-  announce(describe(result), sub, cls);
-  if (net > 0) Sound.win();
-
-  clearTimeout(settleTimer);
-  settleTimer = setTimeout(endSettle, 4000);
-  renderStats();
-  update();
-
-  if (Wallet.balance < 1) {
-    clearTimeout(bustTimer);
-    bustTimer = setTimeout(showBust, 2200);
-  }
-}
-
-function endSettle() {
-  if (!state.settle) return;
-  clearTimeout(settleTimer);
-  state.settle = null;
-  renderChips();
-  $('#announce').textContent = 'Faites vos jeux';
-}
-
-// ---------------------------------------------------------------
-// Affichage
-// ---------------------------------------------------------------
+let annKey = '';
 function announce(main, sub, cls = '') {
+  const k = main + '|' + sub + '|' + cls;
+  if (k === annKey) return; // évite de répéter l'annonce aux lecteurs d'écran
+  annKey = k;
   $('#announce').textContent = main;
   const s = $('#announceSub');
   s.textContent = sub;
@@ -768,23 +700,173 @@ function clearWinner() {
   for (const c of numberCells) c.classList.remove('winner');
 }
 
-function update() {
-  const tb = totalOf(state.bets);
-  const betting = state.phase === 'betting';
-  $('#balance').textContent = money(Wallet.balance);
+function reveal(v) {
+  const n = v.result;
+  Wheel.finish(n);
+  showBadge(n);
+  clearWinner();
+  numberCells[n].classList.add('winner');
+  const s = v.mine && v.mine.settle;
+  if (s) {
+    shownNet = s.net;
+    if (s.net > 0) Sound.win();
+  }
+}
+
+function resultLine(v) {
+  const s = v.mine && v.mine.settle;
+  if (!s) return [meOf(v) ? 'Vous n’aviez pas misé sur ce tour.' : '', ''];
+  const { ret, net } = s;
+  if (ret === 0) return [`Perdu ${signed(net)}`, 'neg'];
+  if (net > 0) return [`Vous gagnez ${money(ret)} (${signed(net)})`, 'pos'];
+  if (net < 0) return [`Vous récupérez ${money(ret)} (${signed(net)})`, 'neg'];
+  return [`Mise récupérée (${signed(0)})`, ''];
+}
+
+/** Met à jour le compte à rebours et l'annonce du croupier (appelé plusieurs fois par seconde). */
+function tick() {
+  const v = view;
+  if (!v || !ctrl) return;
+  const bar = $('#rlTimer');
+  if (v.phase === 'betting') {
+    const left = Math.max(0, deadlineAt - performance.now());
+    const sec = Math.ceil(left / 1000);
+    bar.classList.remove('idle');
+    bar.firstElementChild.style.width = `${clamp(left / (v.betTime || 1), 0, 1) * 100}%`;
+    bar.classList.toggle('late', left <= v.lastCall);
+    const mine = v.mine || {};
+    let extra = '';
+    if (isNet()) {
+      const ps = v.players.filter((p) => p && p.connected);
+      const ready = ps.filter((p) => p.ready).length;
+      if (ps.length > 1) extra = ` · ${ready}/${ps.length} prêt${ready > 1 ? 's' : ''}`;
+    }
+    if (left <= 0) announce('Rien ne va plus', 'Les jeux sont faits');
+    else if (left <= v.lastCall) announce('Derniers jeux', `Les jeux ferment dans ${sec} s${extra}`);
+    else if (mine.ready) announce('Faites vos jeux', `Prêt · lancement dans ${sec} s${extra}`);
+    else announce('Faites vos jeux', `Les jeux ferment dans ${sec} s${extra}`);
+    return;
+  }
+  bar.classList.add('idle');
+  bar.classList.remove('late');
+  bar.firstElementChild.style.width = '0%';
+  if (v.phase === 'spinning') {
+    announce('Rien ne va plus', 'La bille est lancée…');
+  } else if (v.phase === 'result' && Number.isInteger(v.result)) {
+    const [sub, cls] = resultLine(v);
+    announce(describe(v.result), sub, cls);
+  }
+}
+
+// ---------------------------------------------------------------
+// Affichage
+// ---------------------------------------------------------------
+function onView(v) {
+  view = v;
+  if (v.phase === 'betting') deadlineAt = performance.now() + (Number(v.deadlineMs) || 0);
+  // Nouveau tirage : la bille est lancée (même durée chez tous les joueurs)
+  if (v.spin && v.spin.id !== animSpin) {
+    animSpin = v.spin.id;
+    clearWinner();
+    $('#resultBadge').hidden = true;
+    if (v.phase === 'spinning' && v.spin.elapsedMs < 1500) {
+      Wheel.launch(v.spin.result, { Ta: Number(v.spin.Ta), Tb: Number(v.spin.Tb) });
+    } else {
+      Wheel.reset(); // arrivé en cours de tour : la bille apparaîtra avec le résultat
+    }
+  }
+  if (v.phase === 'result' && Number.isInteger(v.result) && v.round !== revealed) {
+    revealed = v.round;
+    reveal(v);
+  }
+  render();
+}
+
+function render() {
+  if (!view || !ctrl) return;
+  const v = view;
+  const me = meOf(v);
+  const mine = v.mine || {};
+  const betting = v.phase === 'betting' && !!me;
+  const tb = me ? Number(me.bet) || 0 : 0;
+  const stack = me ? Number(me.stack) || 0 : 0;
+
+  $('#balanceLabel').textContent = isNet() ? 'Tapis' : 'Solde';
+  $('#balance').textContent = me ? money(stack) : '—';
   $('#totalBet').textContent = money(tb);
   const ln = $('#lastNet');
-  if (state.lastNet === null) { ln.textContent = '—'; ln.className = ''; }
-  else { ln.textContent = signed(state.lastNet); ln.className = state.lastNet > 0 ? 'pos' : state.lastNet < 0 ? 'neg' : ''; }
+  if (shownNet === null) { ln.textContent = '—'; ln.className = ''; }
+  else { ln.textContent = signed(shownNet); ln.className = netClass(shownNet); }
 
-  $('#undoBtn').disabled = !betting || state.undo.length === 0;
+  $('#undoBtn').disabled = !betting || !mine.undo;
   $('#clearBtn').disabled = !betting || tb === 0;
-  $('#doubleBtn').disabled = !betting || tb === 0 || tb > Wallet.balance;
-  $('#rebetBtn').disabled = !betting || !state.lastBets || totalOf(state.lastBets) > Wallet.balance;
-  $('#spinBtn').disabled = !betting || tb === 0;
-  $('#leaveBtn').disabled = !betting;
-  for (const b of chipsEl.children) b.classList.toggle('dim', Number(b.dataset.value) > Wallet.balance);
+  $('#doubleBtn').disabled = !betting || tb === 0 || tb > stack;
+  $('#rebetBtn').disabled = !betting || !mine.lastBets || mine.lastBets > stack;
+  const sb = $('#spinBtn');
+  if (isNet()) {
+    sb.textContent = mine.ready ? 'Prêt ✓' : 'Je suis prêt';
+    sb.title = mine.ready ? 'Cliquez pour annuler' : 'La bille part dès que tous les joueurs sont prêts';
+    sb.disabled = !betting;
+  } else {
+    sb.textContent = mine.ready ? 'Lancement…' : 'Lancer la bille';
+    sb.title = '';
+    sb.disabled = !betting || tb === 0 || mine.ready;
+  }
+  sb.classList.toggle('on', !!mine.ready);
+  $('#rlAuto').checked = !!mine.auto;
+  $('#rlAuto').disabled = !me;
+  // L'hôte peut fermer la table à tout moment (le tour en cours est alors annulé)
+  $('#leaveBtn').disabled = v.phase === 'spinning' && tb > 0 && ctrl.mode !== 'host';
+  for (const b of chipsEl.children) b.classList.toggle('dim', Number(b.dataset.value) > stack);
+
   renderChips();
+  renderStats(Array.isArray(v.history) ? v.history.filter((n) => Number.isInteger(n) && n >= 0 && n <= 36) : []);
+  if (isNet()) Net.updatePanel(v.room, playersHtml(v));
+  tick();
+  checkBust(v, me);
+}
+
+function playersHtml(v) {
+  const rows = [];
+  v.players.forEach((p, i) => {
+    if (!p) return;
+    let tag = '';
+    if (!p.connected) tag = '<span class="np-tag off">déconnecté</span>';
+    else if (v.phase === 'betting' && p.ready) tag = '<span class="np-tag ok">prêt</span>';
+    else if (v.phase === 'result' && p.played && typeof p.lastNet === 'number') tag = `<span class="np-tag ${netClass(p.lastNet)}">${signed(p.lastNet)}</span>`;
+    rows.push(`<div class="np-row${i === v.you ? ' you' : ''}">
+        <i class="np-dot" style="background:${safeColor(p.color)}"></i>
+        <span class="np-name">${esc(p.name)}${i === v.you ? ' <small>(vous)</small>' : ''}</span>${tag}
+        <span class="np-bet">${Number(p.bet) ? money(Number(p.bet)) : ''}</span>
+        <span class="np-stack">${money(Number(p.stack) || 0)}</span>
+      </div>`);
+  });
+  return `<div class="np-head"><span>Joueurs</span><span>Mise · Tapis</span></div>${rows.join('')}`;
+}
+
+function checkBust(v, me) {
+  const broke = me && me.stack < 1 && !(me.bet > 0) && v.phase !== 'spinning';
+  if (!broke) {
+    clearTimeout(bustTimer);
+    bustTimer = 0;
+    if (me && me.stack >= 1) bustShown = false;
+    return;
+  }
+  if (bustTimer || bustShown) return;
+  bustTimer = setTimeout(async () => {
+    bustTimer = 0;
+    const m = meOf(view);
+    if (!ctrl || !m || m.stack >= 1 || m.bet > 0 || document.querySelector('dialog[open]')) return;
+    bustShown = true;
+    if (!isNet()) {
+      await infoBox('Plus de jetons',
+        '<p>Votre portefeuille est vide. Retournez au hall : vous pourrez le recharger à la caisse si vous souhaitez continuer.</p>',
+        'Retour au hall');
+      leave(true);
+    } else if (await confirmBox('Plus de jetons', '<p>Vous n’avez plus de jetons à cette table.</p>', 'Quitter la table', 'Rester regarder')) {
+      leave(true);
+    }
+  }, 2200);
 }
 
 // Survol : surligne les numéros couverts et indique le paiement
@@ -806,7 +888,8 @@ function setHover(key) {
 function showSpotInfo(key) {
   const s = spots.get(key);
   const k = s.numbers.length;
-  const on = state.bets.get(key);
+  let on = 0;
+  if (view && Array.isArray(view.bets)) for (const b of view.bets) if (b[0] === key && b[2] === view.you) on += Number(b[1]) || 0;
   let html = `<b>${s.label}</b> · ${k} numéro${k > 1 ? 's' : ''} · <span class="pay">paie ${36 / k - 1} contre 1</span>`;
   if (s.even) html += ' · la partage sur le zéro';
   if (on) html += ` · misé : <b>${money(on)}</b>`;
@@ -829,7 +912,7 @@ board.addEventListener('mouseover', (e) => {
 });
 board.addEventListener('mouseleave', () => setHover(null));
 
-// Historique et statistiques de la session
+// Historique et statistiques
 function splitRow(parts, n) {
   const labels = parts
     .filter((p) => p[0])
@@ -839,8 +922,7 @@ function splitRow(parts, n) {
   return `<div class="split"><div class="split-labels">${labels}</div><div class="split-bar">${bars}</div></div>`;
 }
 
-function renderStats() {
-  const h = state.history;
+function renderStats(h) {
   const n = h.length;
   $('#roundCount').textContent = `${n} tour${n > 1 ? 's' : ''}`;
   $('#historyList').innerHTML = n
@@ -871,9 +953,9 @@ function renderStats() {
       .slice(0, 5);
     const gap = (i) => { const k = h.indexOf(i); return k === -1 ? n : k; };
     const cold = all.slice().sort((a, b) => gap(b) - gap(a)).slice(0, 5);
-    const chip = (i, title) => `<span class="hnum sm ${colorOf(i)}" title="${title}">${i}</span>`;
-    html += `<div class="hotcold"><span>Chauds</span><div class="row">${hot.map((i) => chip(i, `Sorti ${counts[i]} fois`)).join('')}</div>`;
-    html += `<span>Absents</span><div class="row">${cold.map((i) => chip(i, `Absent depuis ${gap(i)} tours`)).join('')}</div></div>`;
+    const chipH = (i, title) => `<span class="hnum sm ${colorOf(i)}" title="${title}">${i}</span>`;
+    html += `<div class="hotcold"><span>Chauds</span><div class="row">${hot.map((i) => chipH(i, `Sorti ${counts[i]} fois`)).join('')}</div>`;
+    html += `<span>Absents</span><div class="row">${cold.map((i) => chipH(i, `Absent depuis ${gap(i)} tours`)).join('')}</div></div>`;
     html += '<p class="footnote">Chaque tirage est indépendant : un numéro « chaud » ou absent n\'a ni plus ni moins de chances de sortir.</p>';
   } else {
     html += '<p class="footnote">Numéros chauds et absents affichés après 10 tours.</p>';
@@ -881,60 +963,187 @@ function renderStats() {
   box.innerHTML = html;
 }
 
-
 // ---------------------------------------------------------------
-// Entrée et sortie de la roulette
+// Ouverture d'une table
 // ---------------------------------------------------------------
-function enter() {
+function resetSession() {
+  view = null;
+  animSpin = -1;
+  revealed = -1;
+  shownNet = null;
+  annKey = '';
+  bustShown = false;
   clearTimeout(bustTimer);
-  state.phase = 'betting';
-  state.bets = new Map();
-  state.undo = [];
-  state.settle = null;
-  if (!state.chip || state.chip > Wallet.balance) state.chip = defaultChip(Wallet.balance);
-  if (!state.history.length) {
-    Wheel.reset();
-    $('#resultBadge').hidden = true;
-    announce('Faites vos jeux', `Vous disposez de ${money(Wallet.balance)} de jetons.`);
-  }
-  $('#betInfo').textContent = DEFAULT_INFO;
+  bustTimer = 0;
+  clearWinner();
+  $('#resultBadge').hidden = true;
+  for (const n of chipEls.values()) n.remove();
+  chipEls.clear();
+  for (const n of otherEls.values()) n.remove();
+  otherEls.clear();
+}
+
+function openTable(stack) {
+  if (!chip || chip > stack) chip = defaultChip(stack);
   markChip();
-  renderStats();
-  update();
+  if (isNet()) Net.mountPanel($('#rlNetSlot'), ctrl);
+  else Net.hidePanel();
+  $('#betInfo').textContent = DEFAULT_INFO;
   showScreen('roulette');
+  clearInterval(ticker);
+  ticker = setInterval(tick, 200);
+  render();
 }
 
-function leave() {
-  if (state.phase === 'spinning') { toast('Attendez la fin du tour.'); return; }
-  endSettle();
-  const onTable = totalOf(state.bets);
-  if (onTable) {
-    Wallet.give(onTable);
-    toast(`Vos mises (${money(onTable)}) vous ont été rendues.`, 'ok');
+function closeSession() {
+  ctrl = null;
+  view = null;
+  clearInterval(ticker);
+  clearTimeout(bustTimer);
+  Net.hidePanel();
+}
+
+/** Roulette en solo : le portefeuille entier est apporté à la table. */
+function enter() {
+  if (!soloTable) {
+    soloTable = new RC.Table({
+      betTime: 15000, resultTime: 4500, seats: 1,
+      onUpdate: () => { if (ctrl && ctrl.mode === 'solo') onView(soloTable.view('me')); },
+    });
   }
-  state.bets = new Map();
-  state.undo = [];
-  state.phase = 'closed';
-  renderChips();
-  backToHall();
+  const stack = Wallet.balance;
+  Wallet.take(stack);
+  ctrl = {
+    mode: 'solo',
+    send: (m) => { const e = soloTable.apply('me', m); if (e) toast(e); },
+    leave: async () => {
+      const s = soloTable.removePlayer('me');
+      if (s === null) return { error: 'Attendez la fin du tour : vos jetons sont en jeu.' };
+      soloTable.stop();
+      return { stack: s };
+    },
+  };
+  resetSession();
+  soloTable.addPlayer({ id: 'me', name: 'Vous', stack });
+  soloTable.start();
+  openTable(stack);
 }
 
-function showBust() {
-  if (state.phase !== 'betting' || Wallet.balance >= 1 || totalOf(state.bets) > 0) return;
-  infoBox('Plus de jetons',
-    '<p>Votre portefeuille est vide. Retournez au hall : vous pourrez le recharger à la caisse si vous souhaitez continuer.</p>',
-    'Retour au hall').then(() => { if (state.phase === 'betting') leave(); });
+/** Table entre amis : ce navigateur fait tourner la roulette. */
+function startHost(peer, code, cfg) {
+  let room = null;
+  const table = new RC.Table({
+    betTime: cfg.betTime, resultTime: 5000, seats: 8,
+    onUpdate: () => { if (room) room.broadcast(); },
+  });
+  const game = {
+    type: 'roulette',
+    info: () => {
+      const n = table.players().length;
+      return {
+        detail: `${n} joueur${n > 1 ? 's' : ''} · ${Math.round(cfg.betTime / 1000)} s pour miser`,
+        free: table.seats.filter((s) => !s).length,
+        buyIn: { min: 10, max: 100000, step: 1 },
+      };
+    },
+    join: (id, name, stack) => (table.addPlayer({ id, name, stack }) < 0 ? 'La table est complète (8 joueurs).' : ''),
+    view: (id) => table.view(id),
+    handle: (id, m) => { const e = table.apply(id, m); return e ? { t: 'err', msg: e } : null; },
+    setConnected: (id, ok) => table.setConnected(id, ok),
+    leave: (id) => {
+      const s = table.removePlayer(id);
+      return s === null ? { error: 'Attendez la fin du tour : vos jetons sont en jeu.' } : { stack: s };
+    },
+    canDrop: (id) => table.canLeave(id),
+    closeAll: () => {
+      table.cancel();
+      const m = new Map();
+      for (const p of table.players()) m.set(p.id, p.stack);
+      return m;
+    },
+  };
+  const c = { mode: 'host' };
+  room = Net.host(peer, code, cfg.name, game, (v) => { if (ctrl === c) onView(v); });
+  c.room = room;
+  c.send = (m) => { const e = table.apply('host', m); if (e) toast(e); };
+  c.chat = (t) => room.chat(t);
+  c.leave = async () => ({ stack: room.close() });
+  ctrl = c;
+  resetSession();
+  table.addPlayer({ id: 'host', name: cfg.name, stack: cfg.buyIn });
+  table.start();
+  openTable(cfg.buyIn);
+}
+
+/** Invité : la roulette tourne chez l'hôte, on affiche ce qu'il envoie. */
+function startGuest(peer, conn, code, token) {
+  const c = { mode: 'guest' };
+  const g = Net.guest(peer, conn, code, token, {
+    onView: (v) => { if (ctrl === c) onView(v); },
+    onEnd: (stack, msg) => {
+      if (ctrl !== c) return;
+      closeSession();
+      if (stack > 0) Wallet.give(stack);
+      infoBox('Table fermée', `<p>${esc(msg)}</p><p>Vous récupérez <b>${money(stack)}</b>.</p>`, 'Retour au hall').then(backToHall);
+    },
+    onAbort: () => { if (ctrl === c) { closeSession(); backToHall(); } },
+  });
+  c.send = (m) => g.send(m);
+  c.chat = (t) => g.chat(t);
+  c.leave = () => g.leave();
+  ctrl = c;
+  resetSession();
+  openTable(Wallet.balance);
+}
+
+async function leave(skipConfirm) {
+  if (!ctrl) return;
+  const v = view;
+  const me = meOf(v);
+  const c = ctrl;
+  if (v && v.phase === 'spinning' && me && me.bet > 0 && c.mode !== 'host') { toast('Attendez la fin du tour : vos jetons sont en jeu.'); return; }
+  if (c.mode !== 'solo' && !skipConfirm) {
+    const total = me ? me.stack + me.bet : 0;
+    let html = `<p>Vous repartez avec <b>${money(total)}</b>${me && me.bet ? ' (vos mises posées vous sont rendues)' : ''}.</p>`;
+    if (c.mode === 'host') {
+      html += c.room.guestCount() > 0
+        ? '<p><b>Vous êtes l’hôte :</b> la table sera fermée, le tour en cours annulé et chaque joueur récupérera ses jetons.</p>'
+        : '<p class="muted">La table sera fermée.</p>';
+    }
+    if (!(await confirmBox(c.mode === 'host' ? 'Fermer la table ?' : 'Quitter la table ?', html, 'Quitter la table', 'Rester'))) return;
+    if (ctrl !== c) return;
+  }
+  const refund = me ? me.bet : 0;
+  const r = await c.leave();
+  if (r.error) { toast(r.error); return; }
+  if (ctrl !== c) return;
+  closeSession();
+  if (r.stack > 0) Wallet.give(r.stack);
+  if (c.mode !== 'solo') toast(`Vous repartez avec ${money(r.stack)}.`, 'ok');
+  else if (refund > 0) toast(`Vos mises (${money(refund)}) vous ont été rendues.`, 'ok');
+  backToHall();
 }
 
 // ---------------------------------------------------------------
 // Boutons et dialogues
 // ---------------------------------------------------------------
-$('#undoBtn').addEventListener('click', undo);
-$('#clearBtn').addEventListener('click', clearBets);
-$('#doubleBtn').addEventListener('click', doubleBets);
-$('#rebetBtn').addEventListener('click', rebet);
-$('#spinBtn').addEventListener('click', spin);
-$('#leaveBtn').addEventListener('click', leave);
+$('#undoBtn').addEventListener('click', () => send({ t: 'undo' }));
+$('#clearBtn').addEventListener('click', () => send({ t: 'clear' }));
+$('#doubleBtn').addEventListener('click', () => { Sound.chip(); send({ t: 'double' }); });
+$('#rebetBtn').addEventListener('click', () => { Sound.chip(); send({ t: 'rebet' }); });
+function toggleReady() {
+  if (!view || view.phase !== 'betting' || !meOf(view)) return;
+  const mine = view.mine || {};
+  if (!isNet()) {
+    if (!(meOf(view).bet > 0)) { toast('Posez au moins un jeton avant de lancer.'); return; }
+    if (!mine.ready) send({ t: 'ready', v: true });
+  } else {
+    send({ t: 'ready', v: !mine.ready });
+  }
+}
+$('#spinBtn').addEventListener('click', toggleReady);
+$('#rlAuto').addEventListener('change', (e) => send({ t: 'auto', v: e.target.checked }));
+$('#leaveBtn').addEventListener('click', () => leave(false));
 $('#infoBtn').addEventListener('click', () => $('#infoDlg').showModal());
 
 // Test d'uniformité du générateur
@@ -970,16 +1179,27 @@ $('#rngTestBtn').addEventListener('click', () => {
   }, 30);
 });
 
-// Raccourci clavier : Espace pour lancer (uniquement sur l'écran de la roulette)
+// Raccourci clavier : Espace pour lancer / se déclarer prêt (uniquement sur l'écran de la roulette)
 const onRoulette = () => $('#roulette').classList.contains('active') && !document.querySelector('dialog[open]');
 document.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' || !onRoulette()) return;
   if (e.target instanceof HTMLInputElement) return;
   e.preventDefault();
-  if (!e.repeat) spin();
+  if (!e.repeat) toggleReady();
 });
 document.addEventListener('keyup', (e) => {
   if (e.code === 'Space' && onRoulette()) e.preventDefault();
+});
+
+// Création d'une table entre amis (dialogue commun de net.js)
+Net.register('roulette', {
+  readCreate() {
+    const buyIn = Number($('#netCreateCave').value);
+    if (!(buyIn >= 10)) { toast('Il faut au moins 10 € pour ouvrir une table.'); return null; }
+    return { buyIn, betTime: (Number(segValue('netCreateBetTime')) || 20) * 1000 };
+  },
+  startHost,
+  startGuest,
 });
 
 // ---------------------------------------------------------------
@@ -987,7 +1207,7 @@ document.addEventListener('keyup', (e) => {
 // ---------------------------------------------------------------
 buildBoard();
 buildChips();
-renderStats();
+renderStats([]);
 $('#betInfo').textContent = DEFAULT_INFO;
 
 return { enter, leave };

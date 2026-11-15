@@ -1,41 +1,23 @@
 'use strict';
 
 /* =================================================================
-   Blackjack — sabot de 6 jeux, croupier IA « Victor »
-   Le croupier applique les règles du casino (il reste sur tous les 17) :
-   il ne choisit rien et ne triche pas. Son « intelligence » sert à
-   conseiller le joueur : il calcule en direct, à partir des cartes
-   encore inconnues, l'espérance de gain de chaque option.
+   Blackjack — interface de la table
+   - solo : le moteur (blackjack-core.js) tourne dans ce navigateur
+   - entre amis : jusqu'à 5 joueurs face à Victor ; le navigateur de
+     l'hôte fait tourner la table, les invités reçoivent ce qu'ils
+     ont le droit de voir (jamais la carte cachée ni le sabot).
+   Le conseiller IA calcule ici, à partir des cartes déjà montrées,
+   l'espérance de gain exacte de chaque option.
    ================================================================= */
 const Blackjack = (() => {
-  const DECKS = 6;
-  const MAX_HANDS = 4;
-  const MAX_BET = 10000;
-  const CHIP_VALUES = [1, 5, 10, 25, 100, 500, 1000];
+  const BC = BlackjackCore;
+  const { v1, handTotal, isBJ, playerEV } = BC;
+  const CHIP_VALUES = BC.CHIP_VALUES;
   const ACT_FR = { hit: 'Tirer', stand: 'Rester', double: 'Doubler', split: 'Séparer', surrender: 'Abandonner' };
   const ACT_VERB = { hit: 'tirer', stand: 'rester', double: 'doubler', split: 'séparer', surrender: 'abandonner' };
-
-  /** Valeur d'une carte : as = 1, figures = 10. */
-  const v1 = (c) => { const r = c >> 2; return r === 12 ? 1 : r >= 8 ? 10 : r + 2; };
-  /** Comptage Hi-Lo : 2–6 = +1, 7–9 = 0, 10/figures/as = −1. */
-  const hiLo = (c) => { const v = v1(c); return v >= 2 && v <= 6 ? 1 : v === 10 || v === 1 ? -1 : 0; };
-
-  function handTotal(cards) {
-    let hard = 0;
-    let ace = false;
-    for (const x of cards) {
-      const v = v1(x.c);
-      hard += v;
-      if (v === 1) ace = true;
-    }
-    const soft = ace && hard + 10 <= 21;
-    return { t: soft ? hard + 10 : hard, soft };
-  }
-  const isBJ = (h) => h.cards.length === 2 && !h.split && handTotal(h.cards).t === 21;
-  const dealerHasBJ = () => S.dealer.length === 2 && handTotal(S.dealer).t === 21;
   const pct = (x, d = 1) => `${x > 0 ? '+' : x < 0 ? '−' : ''}${Math.abs(x * 100).toFixed(d).replace('.', ',')} %`;
-  const say = (text) => { $('#bjSay').textContent = text; };
-  const pick = (arr) => RNG.pick(arr);
+  const pick = (arr, i) => arr[(Number(i) || 0) % arr.length];
+  const isCard = (c) => Number.isInteger(c) && c >= 0 && c < 52;
 
   const LINES = {
     welcome: ['Bienvenue à ma table ! Posez votre mise quand vous voulez.', 'Bonsoir ! Installez-vous, les cartes sont prêtes.'],
@@ -47,660 +29,163 @@ const Blackjack = (() => {
     lose: ['La banque l’emporte cette fois.', 'Pas de chance sur celle-ci.'],
     push: ['Égalité, votre mise vous est rendue.'],
   };
-
-  // ---------------------------------------------------------------
-  // État
-  // ---------------------------------------------------------------
-  const S = {
-    phase: 'closed', // betting | dealing | insurance | playing | dealer | closed
-    busy: false,
-    showingResult: false,
-    shoe: [], pos: 0, cut: 0, shuffleDue: true,
-    bet: 0, lastBet: 0, chip: 5,
-    hands: [], active: 0,
-    dealer: [], holeHidden: true,
-    insurance: 0,
-    running: 0, serial: 0,
-    lastNet: null,
-    stats: { rounds: 0, wins: 0, losses: 0, pushes: 0, bj: 0, net: 0 },
-  };
-  const seen = new Set();   // cartes déjà animées
-  const flipped = new Set();
-
-  // ---------------------------------------------------------------
-  // Sabot
-  // ---------------------------------------------------------------
-  function newShoe() {
-    const s = [];
-    for (let d = 0; d < DECKS; d++) for (let c = 0; c < 52; c++) s.push(c);
-    RNG.shuffle(s); // Fisher-Yates avec le générateur cryptographique
-    S.shoe = s;
-    S.pos = 0;
-    S.cut = Math.round(s.length * RNG.range(0.72, 0.82)); // carte de coupe
-    S.running = 0;
-    S.shuffleDue = false;
-  }
-  function draw(faceUp = true) {
-    if (S.pos >= S.shoe.length) newShoe(); // sécurité, n'arrive pas en pratique
-    const c = S.shoe[S.pos++];
-    if (S.pos >= S.cut) S.shuffleDue = true;
-    if (faceUp) S.running += hiLo(c);
-    return { c, id: ++S.serial };
-  }
-  /** Composition des cartes encore inconnues du joueur (sabot + carte cachée). */
-  function unseen() {
-    const comp = new Array(11).fill(0);
-    for (let i = S.pos; i < S.shoe.length; i++) comp[v1(S.shoe[i])]++;
-    if (S.holeHidden && S.dealer[1]) comp[v1(S.dealer[1].c)]++;
-    return comp;
-  }
-
-  // ---------------------------------------------------------------
-  // IA : probabilités du croupier et espérance de chaque option
-  // ---------------------------------------------------------------
-  /** Distribution finale du croupier [17, 18, 19, 20, 21, saute], sachant qu'il n'a pas blackjack. */
-  function dealerDist(up, comp) {
-    const tot = comp.reduce((a, b) => a + b, 0);
-    const p = comp.map((x) => x / tot);
-    const memo = new Map();
-    function rec(hard, ace) {
-      const t = ace && hard + 10 <= 21 ? hard + 10 : hard;
-      if (t > 21) return [0, 0, 0, 0, 0, 1];
-      if (t >= 17) { const r = [0, 0, 0, 0, 0, 0]; r[t - 17] = 1; return r; } // reste sur tous les 17
-      const key = hard * 2 + (ace ? 1 : 0);
-      if (memo.has(key)) return memo.get(key);
-      const r = [0, 0, 0, 0, 0, 0];
-      for (let v = 1; v <= 10; v++) {
-        if (!p[v]) continue;
-        const sub = rec(hard + v, ace || v === 1);
-        for (let k = 0; k < 6; k++) r[k] += p[v] * sub[k];
-      }
-      memo.set(key, r);
-      return r;
-    }
-    const out = [0, 0, 0, 0, 0, 0];
-    let norm = 0;
-    for (let v = 1; v <= 10; v++) {
-      if (!p[v]) continue;
-      if ((up === 1 && v === 10) || (up === 10 && v === 1)) continue; // le croupier a vérifié : pas de blackjack
-      norm += p[v];
-      const sub = rec(up + v, up === 1 || v === 1);
-      for (let k = 0; k < 6; k++) out[k] += p[v] * sub[k];
-    }
-    return out.map((x) => x / norm);
-  }
-
-  /** Espérance (en fraction de la mise initiale) de chaque option pour une main. */
-  function playerEV(vals, up, comp, opt) {
-    const tot = comp.reduce((a, b) => a + b, 0);
-    const p = comp.map((x) => x / tot);
-    const D = dealerDist(up, comp);
-    const totOf = (hard, ace) => (ace && hard + 10 <= 21 ? hard + 10 : hard);
-    const standEV = (t) => {
-      if (t > 21) return -1;
-      let ev = D[5];
-      for (let d = 17; d <= 21; d++) {
-        if (t > d) ev += D[d - 17];
-        else if (t < d) ev -= D[d - 17];
-      }
-      return ev;
-    };
-    const memo = new Map();
-    function best(hard, ace) {
-      const t = totOf(hard, ace);
-      if (t > 21) return -1;
-      if (t === 21) return standEV(21);
-      return Math.max(standEV(t), hit(hard, ace));
-    }
-    function hit(hard, ace) {
-      const key = hard * 2 + (ace ? 1 : 0);
-      if (memo.has(key)) return memo.get(key);
-      let ev = 0;
-      for (let v = 1; v <= 10; v++) if (p[v]) ev += p[v] * best(hard + v, ace || v === 1);
-      memo.set(key, ev);
-      return ev;
-    }
-    function dbl(hard, ace) {
-      let ev = 0;
-      for (let v = 1; v <= 10; v++) if (p[v]) ev += p[v] * standEV(totOf(hard + v, ace || v === 1));
-      return 2 * ev;
-    }
-    let hard = 0;
-    let ace = false;
-    for (const v of vals) { hard += v; if (v === 1) ace = true; }
-    const res = { stand: standEV(totOf(hard, ace)) };
-    if (opt.canHit !== false) res.hit = hit(hard, ace);
-    if (opt.canDouble) res.double = dbl(hard, ace);
-    if (opt.canSurrender) res.surrender = -0.5;
-    if (opt.canSplit) {
-      const c = vals[0];
-      let one = 0;
-      for (let v = 1; v <= 10; v++) {
-        if (!p[v]) continue;
-        const h2 = c + v;
-        const a2 = c === 1 || v === 1;
-        one += p[v] * (c === 1 ? standEV(totOf(h2, a2)) : Math.max(best(h2, a2), dbl(h2, a2)));
-      }
-      res.split = 2 * one;
-    }
-    let bestKey = 'stand';
-    for (const k of Object.keys(res)) if (res[k] > res[bestKey] + 1e-9) bestKey = k;
-    return { ev: res, best: bestKey, bust: D[5] };
-  }
-
-  function legalActions(h) {
-    if (!h || h.done) return {};
-    const two = h.cards.length === 2;
-    return {
-      hit: !h.splitAces,
-      stand: true,
-      double: two && !h.splitAces && Wallet.balance >= h.bet,
-      split: two && S.hands.length < MAX_HANDS && !h.splitAces
-        && v1(h.cards[0].c) === v1(h.cards[1].c) && Wallet.balance >= h.bet,
-      surrender: two && S.hands.length === 1 && !h.split,
-    };
-  }
-
-  function adviceFor(h) {
-    if (!h || h.done || !S.dealer[0]) return null;
-    const L = legalActions(h);
-    return playerEV(h.cards.map((x) => v1(x.c)), v1(S.dealer[0].c), unseen(), {
-      canHit: L.hit, canDouble: L.double, canSplit: L.split, canSurrender: L.surrender,
-    });
-  }
-
-  // ---------------------------------------------------------------
-  // Déroulement d'une main
-  // ---------------------------------------------------------------
-  const cur = () => S.hands[S.active];
-  const newHand = (bet) => ({ cards: [], bet, done: false, doubled: false, split: false, splitAces: false, surrendered: false, result: null, payout: 0 });
-
-  function clearIfShowing() {
-    if (!S.showingResult) return;
-    S.showingResult = false;
-    S.hands = [];
-    S.dealer = [];
-    S.insurance = 0;
-  }
-
-  async function deal() {
-    if (S.phase !== 'betting' || S.busy) return;
-    clearIfShowing();
-    if (S.bet <= 0) { toast('Posez d’abord une mise.'); return; }
-    S.busy = true;
-    if (S.shuffleDue) {
-      newShoe();
-      say('Je mélange un nouveau sabot de 6 jeux…');
-      render();
-      Sound.flip();
-      await sleep(1000);
-    }
-    S.phase = 'dealing';
-    S.lastBet = S.bet;
-    S.hands = [newHand(S.bet)];
-    S.bet = 0;
-    S.active = 0;
-    S.dealer = [];
-    S.holeHidden = true;
-    S.insurance = 0;
-    say(pick(LINES.deal));
-    render();
-    const steps = [() => S.hands[0].cards.push(draw()), () => S.dealer.push(draw()),
-      () => S.hands[0].cards.push(draw()), () => S.dealer.push(draw(false))];
-    for (const step of steps) {
-      await sleep(330);
-      step();
-      Sound.card();
-      render();
-    }
-    await sleep(350);
-
-    const up = v1(S.dealer[0].c);
-    if (up === 1 && Wallet.balance >= S.hands[0].bet / 2) {
-      S.phase = 'insurance';
-      S.busy = false;
-      say(isBJ(S.hands[0])
-        ? 'Blackjack ! Mais j’ai un as : voulez-vous l’égalité (assurance) ?'
-        : 'J’ai un as. Souhaitez-vous prendre l’assurance ?');
-      render();
-      return;
-    }
-    await afterInsurance();
-  }
-
-  async function insurance(take) {
-    if (S.phase !== 'insurance' || S.busy) return;
-    S.busy = true;
-    if (take) {
-      const amt = S.hands[0].bet / 2;
-      if (Wallet.take(amt)) { S.insurance = amt; Sound.chip(); }
-    }
-    await afterInsurance();
-  }
-
-  async function afterInsurance() {
-    S.phase = 'dealing';
-    const up = v1(S.dealer[0].c);
-    if (up === 1 || up === 10) {
-      say('Je vérifie ma carte cachée…');
-      render();
-      await sleep(900);
-      if (dealerHasBJ()) {
-        await revealHole();
-        say(S.insurance ? 'Blackjack du croupier. Votre assurance paie 2 contre 1.' : 'Blackjack du croupier.');
-        return settle();
-      }
-      say(S.insurance ? 'Pas de blackjack : l’assurance est perdue. À vous.' : 'Pas de blackjack. À vous de jouer.');
-    }
-    if (isBJ(S.hands[0])) {
-      S.hands[0].done = true;
-      await revealHole();
-      return settle();
-    }
-    S.phase = 'playing';
-    S.busy = false;
-    if (up !== 1 && up !== 10) say('À vous de jouer.');
-    render();
-  }
-
-  async function act(kind) {
-    if (S.phase !== 'playing' || S.busy) return;
-    const h = cur();
-    const L = legalActions(h);
-    if (!L[kind]) return;
-    const adv = adviceFor(h);
-    S.busy = true;
-    commentChoice(kind, adv);
-
-    if (kind === 'hit') {
-      h.cards.push(draw());
-      Sound.card();
-      render();
-      await sleep(380);
-      const t = handTotal(h.cards).t;
-      if (t > 21) { h.done = true; say(pick(LINES.bust)); await sleep(550); return next(); }
-      if (t === 21) { h.done = true; await sleep(250); return next(); }
-      S.busy = false;
-      render();
-      return;
-    }
-    if (kind === 'stand') { h.done = true; return next(); }
-    if (kind === 'double') {
-      Wallet.take(h.bet);
-      h.bet *= 2;
-      h.doubled = true;
-      Sound.chip();
-      h.cards.push(draw());
-      Sound.card();
-      render();
-      await sleep(500);
-      h.done = true;
-      if (handTotal(h.cards).t > 21) { say(pick(LINES.bust)); await sleep(450); }
-      return next();
-    }
-    if (kind === 'split') {
-      Wallet.take(h.bet);
-      const aces = v1(h.cards[0].c) === 1;
-      const nh = newHand(h.bet);
-      nh.cards.push(h.cards.pop());
-      nh.split = true;
-      nh.splitAces = aces;
-      h.split = true;
-      h.splitAces = aces;
-      S.hands.splice(S.active + 1, 0, nh);
-      Sound.chip();
-      render();
-      await sleep(350);
-      h.cards.push(draw());
-      Sound.card();
-      render();
-      await sleep(380);
-      if (aces) {
-        nh.cards.push(draw());
-        Sound.card();
-        render();
-        await sleep(380);
-        h.done = true;
-        nh.done = true;
-        say('As séparés : une seule carte par main.');
-        return next();
-      }
-      if (handTotal(h.cards).t === 21) { h.done = true; return next(); }
-      S.busy = false;
-      render();
-      return;
-    }
-    if (kind === 'surrender') {
-      h.surrendered = true;
-      h.done = true;
-      say('Vous abandonnez : je vous rends la moitié de la mise.');
-      return next();
-    }
-  }
-
-  async function next() {
-    const i = S.hands.findIndex((x) => !x.done);
-    if (i === -1) return dealerTurn();
-    S.active = i;
-    const h = S.hands[i];
-    if (h.cards.length === 1) {
-      render();
-      await sleep(300);
-      h.cards.push(draw());
-      Sound.card();
-      render();
-      await sleep(380);
-      if (handTotal(h.cards).t === 21) { h.done = true; return next(); }
-    }
-    S.busy = false;
-    render();
-  }
-
-  async function revealHole() {
-    if (!S.holeHidden) return;
-    S.holeHidden = false;
-    S.running += hiLo(S.dealer[1].c);
-    Sound.flip();
-    render();
-    await sleep(600);
-  }
-
-  async function dealerTurn() {
-    S.phase = 'dealer';
-    S.busy = true;
-    render();
-    await sleep(300);
-    await revealHole();
-    const live = S.hands.some((h) => !h.surrendered && handTotal(h.cards).t <= 21);
-    if (live) {
-      while (handTotal(S.dealer).t < 17) {
-        await sleep(700);
-        S.dealer.push(draw());
-        Sound.card();
-        render();
-      }
-    }
-    await sleep(500);
-    settle();
-  }
-
-  function settle() {
-    const d = handTotal(S.dealer).t;
-    const dBJ = dealerHasBJ();
-    const dBust = d > 21;
-    let ret = 0;
-    let staked = 0;
-    let anyBJ = false;
-    for (const h of S.hands) {
-      staked += h.bet;
-      const t = handTotal(h.cards).t;
-      if (h.surrendered) { h.result = 'surrender'; h.payout = h.bet / 2; }
-      else if (t > 21) { h.result = 'bust'; h.payout = 0; }
-      else if (isBJ(h)) {
-        h.result = dBJ ? 'push' : 'blackjack';
-        h.payout = dBJ ? h.bet : h.bet * 2.5; // le blackjack paie 3 contre 2
-        if (!dBJ) anyBJ = true;
-      }
-      else if (dBJ) { h.result = 'lose'; h.payout = 0; }
-      else if (dBust || t > d) { h.result = 'win'; h.payout = h.bet * 2; }
-      else if (t === d) { h.result = 'push'; h.payout = h.bet; }
-      else { h.result = 'lose'; h.payout = 0; }
-      ret += h.payout;
-      const st = S.stats;
-      if (h.result === 'win' || h.result === 'blackjack') st.wins++;
-      else if (h.result === 'push') st.pushes++;
-      else st.losses++;
-      if (h.result === 'blackjack') st.bj++;
-    }
-    if (S.insurance) {
-      staked += S.insurance;
-      if (dBJ) ret += S.insurance * 3; // l'assurance paie 2 contre 1
-    }
-    Wallet.give(ret);
-    const net = Math.round((ret - staked) * 100) / 100;
-    S.lastNet = net;
-    S.stats.rounds++;
-    S.stats.net += net;
-
-    if (anyBJ) say(pick(LINES.playerBJ));
-    else if (dBust && S.hands.some((h) => h.result === 'win')) say(pick(LINES.dealerBust));
-    else if (dBJ && !S.insurance) say('Blackjack du croupier, la banque gagne.');
-    else if (net > 0) say(pick(LINES.win));
-    else if (net < 0 && !S.hands.every((h) => h.result === 'bust' || h.result === 'surrender')) say(pick(LINES.lose));
-    else if (net === 0) say(pick(LINES.push));
-    if (net > 0) Sound.win();
-    if (S.shuffleDue) setTimeout(() => { if (S.showingResult) say('La carte de coupe est sortie : je mélangerai avant la prochaine donne.'); }, 1800);
-
-    S.phase = 'betting';
-    S.showingResult = true;
-    S.busy = false;
-    render();
-
-    if (Wallet.balance < 1) {
-      setTimeout(() => {
-        if (S.phase !== 'betting' || Wallet.balance >= 1 || S.bet > 0) return;
-        infoBox('Plus de jetons',
-          '<p>Votre portefeuille est vide. Retournez au hall : vous pourrez le recharger à la caisse si vous souhaitez continuer.</p>',
-          'Retour au hall').then(() => { if (S.phase === 'betting') leave(); });
-      }, 1600);
-    }
-  }
-
-  /** Le croupier commente un choix nettement moins bon que l'optimum. */
-  function commentChoice(kind, adv) {
-    if (!adv || adv.best === kind || adv.ev[kind] === undefined) return;
-    const loss = adv.ev[adv.best] - adv.ev[kind];
-    if (loss < 0.03) return;
-    say(`Remarque : ${ACT_VERB[adv.best]} était meilleur ici (≈ ${pct(loss)} de la mise en moyenne).`);
-  }
-
-  // ---------------------------------------------------------------
-  // Mises
-  // ---------------------------------------------------------------
-  function placeChip(v = S.chip) {
-    if (S.phase !== 'betting' || S.busy) return;
-    clearIfShowing();
-    if (v > Wallet.balance) { toast('Solde insuffisant pour ce jeton.'); render(); return; }
-    if (S.bet + v > MAX_BET) { toast(`Mise maximale : ${money(MAX_BET)}.`); return; }
-    Wallet.take(v);
-    S.bet += v;
-    Sound.chip();
-    render();
-  }
-  function clearBet() {
-    if (S.phase !== 'betting' || S.busy) return;
-    clearIfShowing();
-    if (S.bet) Wallet.give(S.bet);
-    S.bet = 0;
-    render();
-  }
-  function rebet() {
-    if (S.phase !== 'betting' || S.busy || !S.lastBet) return;
-    clearIfShowing();
-    const add = S.lastBet - S.bet;
-    if (add <= 0) { render(); return; }
-    if (add > Wallet.balance) { toast('Solde insuffisant pour remiser.'); render(); return; }
-    Wallet.take(add);
-    S.bet = S.lastBet;
-    Sound.chip();
-    render();
-  }
-
-  // ---------------------------------------------------------------
-  // Affichage
-  // ---------------------------------------------------------------
-  function cardsHtml(list, hideHole) {
-    return list.map((x, i) => {
-      const hidden = hideHole && i === 1;
-      const anim = !seen.has(x.id);
-      let cls = '';
-      if (!hidden && i === 1 && !flipped.has(x.id) && seen.has(x.id) && list === S.dealer) { cls = 'flip'; flipped.add(x.id); }
-      seen.add(x.id);
-      return Cards.html(hidden ? null : x.c, { anim, cls });
-    }).join('');
-  }
-
-  function totalLabel(cards, final) {
-    const t = handTotal(cards);
-    if (t.soft && t.t < 21 && !final) return `${t.t - 10} / ${t.t}`;
-    return String(t.t);
-  }
-
   const RESULT_FR = {
     win: ['Gagné', 'pos'], blackjack: ['Blackjack !', 'pos'], push: ['Égalité', ''],
     lose: ['Perdu', 'neg'], bust: ['Dépassé', 'neg'], surrender: ['Abandon', 'neg'],
   };
 
-  function render() {
-    if (!$('#blackjack').classList.contains('active') && S.phase === 'closed') return;
-    // En-tête
-    const onTable = S.phase === 'betting' && !S.showingResult
-      ? S.bet
-      : S.hands.reduce((a, h) => a + h.bet, 0) + S.insurance + (S.showingResult ? S.bet : 0);
-    $('#bjBalance').textContent = money(Wallet.balance);
-    $('#bjBet').textContent = money(S.phase === 'betting' ? S.bet : onTable);
-    const ln = $('#bjLast');
-    ln.textContent = S.lastNet === null ? '—' : signed(S.lastNet);
-    ln.className = S.lastNet === null ? '' : netClass(S.lastNet);
+  let ctrl = null;      // { mode: 'solo' | 'host' | 'guest', send(m), leave() → Promise<{ stack } | { error }> }
+  let view = null;
+  let soloTable = null; // la table solo garde son sabot et ses statistiques d'une visite à l'autre
+  let chip = 5;
+  let seenIds = new Set();
+  let hiddenIds = new Set();
+  let flipped = new Set();
+  let localSay = null;  // remarque du croupier sur un choix, affichée jusqu'à sa prochaine phrase
+  let lastText = '';
+  let lastSayId = -1;
+  let deadlineAt = 0;
+  let ticker = 0;
+  let bustTimer = 0;
+  let bustShown = false;
+  let prevBet = 0;
+  let prevMyTurn = false;
 
-    // Croupier
-    $('#bjDealerCards').innerHTML = cardsHtml(S.dealer, S.holeHidden);
-    const dt = $('#bjDealerTotal');
-    if (!S.dealer.length) dt.textContent = '';
-    else if (S.holeHidden) dt.textContent = String(handTotal([S.dealer[0]]).t);
-    else {
-      const t = handTotal(S.dealer).t;
-      dt.textContent = dealerHasBJ() ? 'Blackjack' : t > 21 ? `${t} · saute` : String(t);
+  const meOf = (v) => (v && v.you >= 0 ? v.seats[v.you] : null);
+  const isNet = () => !!ctrl && ctrl.mode !== 'solo';
+  const send = (m) => { if (ctrl) ctrl.send(m); };
+
+  // ---------------------------------------------------------------
+  // Paroles du croupier (le moteur envoie un code, on rédige ici)
+  // ---------------------------------------------------------------
+  function sayText(v) {
+    const s = v.say || {};
+    const me = meOf(v);
+    const other = Number.isInteger(s.s) && s.s !== v.you && v.seats[s.s] ? v.seats[s.s].name : null;
+    switch (s.k) {
+      case 'welcome': return pick(LINES.welcome, s.i);
+      case 'join': return other ? `${other} s’installe à la table. Bienvenue !` : pick(LINES.welcome, s.i);
+      case 'leave': return s.name ? `${Net.cleanText(s.name, 16)} quitte la table.` : '';
+      case 'shuffle': return 'Je mélange un nouveau sabot de 6 jeux…';
+      case 'deal': return pick(LINES.deal, s.i);
+      case 'ins':
+        return me && me.inRound && me.hands[0] && isBJ(me.hands[0])
+          ? 'Blackjack ! Mais j’ai un as : voulez-vous l’égalité (assurance) ?'
+          : 'J’ai un as. Souhaitez-vous prendre l’assurance ?';
+      case 'peek': return 'Je vérifie ma carte cachée…';
+      case 'turn': {
+        const pre = s.pre ? (me && me.insurance ? 'Pas de blackjack : l’assurance est perdue. ' : 'Pas de blackjack. ') : '';
+        return pre + (other ? `À ${other} de jouer.` : 'À vous de jouer.');
+      }
+      case 'bust': return other ? `${other} dépasse 21.` : pick(LINES.bust, s.i);
+      case 'surrender': return other ? `${other} abandonne : je lui rends la moitié de sa mise.` : 'Vous abandonnez : je vous rends la moitié de la mise.';
+      case 'splitAces': return 'As séparés : une seule carte par main.';
+      case 'dealer': return 'À moi.';
+      case 'settle': return settleText(v, s);
+      case 'cut': return 'La carte de coupe est sortie : je mélangerai avant la prochaine donne.';
+      default: return '';
     }
-    dt.hidden = !S.dealer.length;
+  }
+  function settleText(v, s) {
+    const me = meOf(v);
+    if (me && me.hands.length && me.hands[0].result) {
+      const hs = me.hands;
+      const net = me.lastNet;
+      if (s.dBJ) {
+        if (me.insurance) return 'Blackjack du croupier. Votre assurance paie 2 contre 1.';
+        if (hs.some((h) => h.result === 'push')) return 'Deux blackjacks : égalité, votre mise vous est rendue.';
+        return 'Blackjack du croupier, la banque gagne.';
+      }
+      if (hs.some((h) => h.result === 'blackjack')) return pick(LINES.playerBJ, s.i);
+      if (s.dBust && hs.some((h) => h.result === 'win')) return pick(LINES.dealerBust, s.i);
+      if (net > 0) return pick(LINES.win, s.i);
+      if (net < 0 && !hs.every((h) => h.result === 'bust' || h.result === 'surrender')) return pick(LINES.lose, s.i);
+      if (net === 0) return LINES.push[0];
+      return '';
+    }
+    if (s.dBJ) return 'Blackjack du croupier.';
+    return s.dBust ? `Je saute avec ${s.d} !` : `La banque fait ${s.d}.`;
+  }
 
-    // Sabot
-    const left = S.shoe.length ? S.shoe.length - S.pos : DECKS * 52;
-    const used = S.shoe.length ? S.pos / S.shoe.length : 0;
-    $('#bjShoe').innerHTML = `<div class="shoe-box"><i style="height:${Math.round((1 - used) * 100)}%"></i></div>`
-      + `<span>Sabot<br><b>${left}</b> cartes</span>`;
+  // ---------------------------------------------------------------
+  // Conseiller IA (calcul exact sur les cartes encore inconnues)
+  // ---------------------------------------------------------------
+  /** Cartes inconnues par valeur : sabot complet moins les cartes déjà montrées. */
+  function unseen(v) {
+    const comp = new Array(11).fill(0);
+    for (let x = 1; x <= 10; x++) comp[x] = Math.max(0, BC.FULL[x] - (Number(v.seen[x]) || 0));
+    return comp;
+  }
+  function activeHand(v) {
+    const me = meOf(v);
+    if (!me || !v.turn || v.turn.seat !== v.you) return null;
+    return me.hands[v.turn.hand] || null;
+  }
+  function adviceFor(v) {
+    const L = v.me && v.me.legal;
+    const h = activeHand(v);
+    if (!L || !h || !v.dealer[0] || !isCard(v.dealer[0].c)) return null;
+    return playerEV(h.cards.map((x) => v1(x.c)), v1(v.dealer[0].c), unseen(v), {
+      canHit: L.hit, canDouble: L.double, canSplit: L.split, canSurrender: L.surrender,
+    });
+  }
+  /** Le croupier commente un choix nettement moins bon que l'optimum. */
+  function commentChoice(kind, adv) {
+    if (!adv || adv.best === kind || adv.ev[kind] === undefined) return;
+    const loss = adv.ev[adv.best] - adv.ev[kind];
+    if (loss < 0.03) return;
+    localSay = { text: `Remarque : ${ACT_VERB[adv.best]} était meilleur ici (≈ ${pct(loss)} de la mise en moyenne).`, id: view.say ? view.say.id : -1 };
+  }
 
-    // Mains du joueur
-    $('#bjHands').innerHTML = S.hands.map((h, i) => {
-      const active = S.phase === 'playing' && i === S.active;
-      const res = h.result ? RESULT_FR[h.result] : null;
-      const resHtml = res
-        ? `<span class="bj-res ${res[1]}">${res[0]}${h.payout && h.result !== 'push' ? ' · ' + money(h.payout) : ''}</span>` : '';
-      return `<div class="bj-hand${active ? ' active' : ''}${h.result ? ' done-' + h.result : ''}">
-          <div class="bj-cards">${cardsHtml(h.cards, false)}</div>
-          <div class="bj-hand-info">
-            <span class="bj-total">${h.cards.length ? totalLabel(h.cards, h.done) : ''}</span>
-            <span class="bj-hand-bet">${money(h.bet)}${h.doubled ? ' · doublée' : ''}</span>
-            ${resHtml}
-          </div>
-        </div>`;
+  // ---------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------
+  function placeChip(value) {
+    const v = view;
+    const me = meOf(v);
+    if (!me) return;
+    if (v.phase !== 'betting') { toast('Attendez la fin de la main en cours.'); return; }
+    if (value > me.stack + 1e-9) { toast('Solde insuffisant pour ce jeton.'); return; }
+    if (me.bet + value > v.maxBet) { toast(`Mise maximale : ${money(v.maxBet)}.`); return; }
+    send({ t: 'bet', amount: value });
+  }
+  function act(kind) {
+    const v = view;
+    if (!v || !v.me || !v.me.legal || !v.me.legal[kind]) return;
+    commentChoice(kind, adviceFor(v));
+    v.me.legal = null; // évite les doubles clics en attendant la réponse
+    send({ t: 'act', kind });
+    render();
+  }
+  function ready() {
+    const me = meOf(view);
+    if (!me || view.phase !== 'betting') return;
+    if (me.bet <= 0) { toast('Posez d’abord une mise.'); return; }
+    if (!me.ready) send({ t: 'ready' });
+  }
+
+  // ---------------------------------------------------------------
+  // Affichage
+  // ---------------------------------------------------------------
+  let newCards = 0;
+  let flipNow = false;
+  function cardsHtml(list) {
+    return list.map((x) => {
+      const id = Number(x.id);
+      const known = isCard(x.c);
+      const anim = !seenIds.has(id);
+      if (anim) { seenIds.add(id); newCards++; }
+      let cls = '';
+      if (!known) hiddenIds.add(id);
+      else if (hiddenIds.has(id) && !flipped.has(id)) { cls = 'flip'; flipped.add(id); flipNow = true; }
+      return Cards.html(known ? x.c : null, { anim, cls });
     }).join('');
-
-    // Cercle de mise
-    const spot = $('#bjSpot');
-    const showSpot = S.phase === 'betting';
-    spot.hidden = !showSpot;
-    spot.innerHTML = S.bet > 0
-      ? `<div class="chip-stack big ${chipClass(S.bet)}">${shortAmount(S.bet)}</div><span class="spot-label">${money(S.bet)}</span>`
-      : '<span class="spot-label">Misez ici</span>';
-
-    // Commandes
-    const betting = S.phase === 'betting';
-    $('#bjBetControls').hidden = !betting;
-    $('#bjInsControls').hidden = S.phase !== 'insurance';
-    $('#bjPlayControls').hidden = !(S.phase === 'playing' || S.phase === 'dealer' || S.phase === 'dealing');
-    $('#bjDealBtn').disabled = S.busy || S.bet <= 0;
-    $('#bjClearBtn').disabled = S.busy || S.bet <= 0;
-    $('#bjRebetBtn').disabled = S.busy || !S.lastBet || S.bet >= S.lastBet || S.lastBet - S.bet > Wallet.balance;
-    $('#bjRebetBtn').textContent = S.lastBet ? `Remiser ${money(S.lastBet)}` : 'Remiser';
-    if (S.phase === 'insurance') $('#bjInsYes').textContent = `Assurance (${money(S.hands[0].bet / 2)})`;
-    const L = S.phase === 'playing' && !S.busy ? legalActions(cur()) : {};
-    for (const k of ['hit', 'stand', 'double', 'split', 'surrender']) $(`[data-bj="${k}"]`).disabled = !L[k];
-    for (const b of $('#bjChips').children) {
-      b.classList.toggle('selected', Number(b.dataset.value) === S.chip);
-      b.classList.toggle('dim', Number(b.dataset.value) > Wallet.balance);
-    }
-    $('#bjLeaveBtn').disabled = !betting || S.busy;
-
-    renderAdvice();
-    renderCount();
-    renderStats();
   }
-
-  function renderAdvice() {
-    const box = $('#bjAdvice');
-    if (!$('#bjAdviceToggle').checked) {
-      box.innerHTML = '<p class="muted small">Conseils masqués. Victor vous signalera quand même les erreurs coûteuses.</p>';
-      return;
-    }
-    if (S.phase === 'insurance') {
-      const comp = unseen();
-      const tot = comp.reduce((a, b) => a + b, 0);
-      const pTen = comp[10] / tot;
-      const ev = 3 * pTen - 1;
-      box.innerHTML = `<p>Probabilité que ma carte cachée vaille 10 : <b>${(pTen * 100).toFixed(1).replace('.', ',')} %</b>.</p>
-        <p>L’assurance rapporte en moyenne <b class="${netClass(ev)}">${pct(ev)}</b> de son montant.</p>
-        <p class="advice-best">${ev > 0 ? '✓ Prenez l’assurance : le sabot est riche en 10.' : '✗ Refusez l’assurance (elle n’est rentable que si plus d’1 carte sur 3 vaut 10).'}</p>`;
-      return;
-    }
-    if (S.phase === 'playing' && !S.busy) {
-      const adv = adviceFor(cur());
-      if (!adv) { box.innerHTML = ''; return; }
-      const rows = Object.entries(adv.ev).sort((a, b) => b[1] - a[1]);
-      const bestKey = adv.best;
-      const second = rows.find(([k]) => k !== bestKey);
-      let why = `Je vous conseille de <b>${ACT_VERB[bestKey]}</b>`;
-      const abs = (x) => `${Math.abs(x * 100).toFixed(1).replace('.', ',')} %`;
-      if (second) why += ` : vous ${adv.ev[bestKey] >= 0 ? 'gagnez' : 'perdez'} en moyenne ${abs(adv.ev[bestKey])} de la mise, contre ${abs(second[1])} ${second[1] >= 0 ? 'de gain' : 'de perte'} en choisissant de ${ACT_VERB[second[0]]}.`;
-      box.innerHTML = `<div class="ev-list">${rows.map(([k, v]) => `
-          <div class="ev-row${k === bestKey ? ' best' : ''}">
-            <span>${k === bestKey ? '✓ ' : ''}${ACT_FR[k]}</span>
-            <span class="ev-bar"><i style="width:${Math.round(((v + 1) / 3) * 100)}%"></i></span>
-            <b class="${netClass(v)}">${pct(v)}</b>
-          </div>`).join('')}</div>
-        <p class="small">${why}</p>
-        <p class="muted small">Risque que je saute avec mon ${handTotal([S.dealer[0]]).t === 11 ? 'as' : handTotal([S.dealer[0]]).t} : <b>${(adv.bust * 100).toFixed(0)} %</b>. Calcul exact à partir des ${unseen().reduce((a, b) => a + b, 0)} cartes encore inconnues.</p>`;
-      return;
-    }
-    if (S.phase === 'betting') {
-      box.innerHTML = '<p class="small">Posez votre mise puis distribuez. Pendant la main, j’affiche ici l’espérance de gain de chaque option, calculée en direct sur les cartes qui restent dans le sabot.</p>';
-      return;
-    }
-    box.innerHTML = '<p class="muted small">…</p>';
+  function totalLabel(cards, final) {
+    const t = handTotal(cards);
+    if (t.soft && t.t < 21 && !final) return `${t.t - 10} / ${t.t}`;
+    return String(t.t);
   }
-
-  function renderCount() {
-    const box = $('#bjCount');
-    if (!$('#bjCountToggle').checked) {
-      box.innerHTML = '<p class="muted small">Activez pour voir le comptage Hi-Lo des cartes sorties.</p>';
-      return;
-    }
-    const unknown = (S.shoe.length ? S.shoe.length - S.pos : DECKS * 52) + (S.holeHidden && S.dealer[1] ? 1 : 0);
-    const decks = Math.max(0.25, unknown / 52);
-    const tc = S.running / decks;
-    const edge = -0.0045 + 0.005 * tc;
-    box.innerHTML = `<div class="count-grid">
-        <div><span>Compte courant</span><b>${S.running > 0 ? '+' : ''}${S.running}</b></div>
-        <div><span>Compte réel</span><b>${tc > 0 ? '+' : ''}${tc.toFixed(1).replace('.', ',')}</b></div>
-        <div><span>Jeux restants</span><b>${decks.toFixed(1).replace('.', ',')}</b></div>
-        <div><span>Avantage estimé</span><b class="${netClass(edge)}">${pct(edge, 2)}</b></div>
-      </div>
-      <p class="muted small">${tc >= 2 ? 'Le sabot est favorable au joueur : c’est le moment où un compteur augmente sa mise.' : tc <= -1 ? 'Sabot défavorable : beaucoup de 10 et d’as sont déjà sortis.' : 'Sabot neutre.'}</p>`;
-  }
-
-  function renderStats() {
-    const st = S.stats;
-    $('#bjStats').innerHTML = `<div class="count-grid">
-        <div><span>Mains</span><b>${st.rounds}</b></div>
-        <div><span>Gagnées</span><b>${st.wins}</b></div>
-        <div><span>Perdues</span><b>${st.losses}</b></div>
-        <div><span>Égalités</span><b>${st.pushes}</b></div>
-        <div><span>Blackjacks</span><b>${st.bj}</b></div>
-        <div><span>Bilan</span><b class="${netClass(st.net)}">${signed(st.net)}</b></div>
-      </div>`;
-  }
-
-  // Jetons (mêmes couleurs qu'à la roulette)
   function chipClass(amount) {
     let v = CHIP_VALUES[0];
     for (const c of CHIP_VALUES) if (amount >= c) v = c;
@@ -713,64 +198,508 @@ const Blackjack = (() => {
     }
     return Number.isInteger(a) ? String(a) : a.toFixed(1).replace('.', ',');
   }
-  function buildChips() {
-    const box = $('#bjChips');
-    box.innerHTML = CHIP_VALUES.map((v) => `<button type="button" class="chip c${v}" data-value="${v}" aria-label="Jeton de ${money(v)}"><span>${v >= 1000 ? v / 1000 + 'k' : v}</span></button>`).join('');
-    box.addEventListener('click', (e) => {
-      const b = e.target.closest('.chip');
-      if (!b) return;
-      S.chip = Number(b.dataset.value);
-      placeChip(S.chip);
-    });
+  const hueOf = (s) => { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; };
+
+  function onView(v) {
+    view = v;
+    deadlineAt = v.deadlineMs ? performance.now() + Number(v.deadlineMs) : 0;
+    render();
+  }
+
+  function render() {
+    if (!view || !ctrl) return;
+    const v = view;
+    const me = meOf(v);
+    newCards = 0;
+    flipNow = false;
+
+    // En-tête
+    const committed = me ? (v.phase === 'betting' ? me.bet : me.hands.reduce((a, h) => a + h.bet, 0) + me.insurance) : 0;
+    $('#bjBalanceLabel').textContent = isNet() ? 'Tapis' : 'Solde';
+    $('#bjBalance').textContent = me ? money(me.stack) : '—';
+    $('#bjBet').textContent = money(committed);
+    const ln = $('#bjLast');
+    const last = me ? me.lastNet : null;
+    ln.textContent = last === null || last === undefined ? '—' : signed(last);
+    ln.className = last === null || last === undefined ? '' : netClass(last);
+
+    // Croupier
+    $('#bjDealerCards').innerHTML = cardsHtml(v.dealer);
+    const dt = $('#bjDealerTotal');
+    const dk = v.dealer.filter((x) => isCard(x.c));
+    if (!v.dealer.length) dt.textContent = '';
+    else if (v.holeHidden) dt.textContent = dk.length ? String(handTotal([dk[0]]).t) : '';
+    else {
+      const t = handTotal(dk).t;
+      dt.textContent = dk.length === 2 && t === 21 ? 'Blackjack' : t > 21 ? `${t} · saute` : String(t);
+    }
+    dt.hidden = !v.dealer.length;
+
+    // Sabot
+    const left = Number(v.shoeLeft) || 0;
+    const used = v.shoeSize ? 1 - left / v.shoeSize : 0;
+    $('#bjShoe').innerHTML = `<div class="shoe-box"><i style="height:${Math.round((1 - used) * 100)}%"></i></div>`
+      + `<span>Sabot<br><b>${left}</b> cartes</span>`;
+
+    renderSeats(v);
+    renderControls(v, me);
+    renderSay(v, me);
+    renderAdvice(v);
+    renderCount(v);
+    renderStats(v);
+    if (isNet()) Net.updatePanel(v.room);
+    tick();
+
+    // Sons
+    if (flipNow) Sound.flip();
+    else if (newCards) Sound.card();
+    if (me && me.bet > prevBet) Sound.chip();
+    prevBet = me ? me.bet : 0;
+    const myTurn = !!(v.me && v.me.legal);
+    if (myTurn && !prevMyTurn && isNet()) Sound.turn();
+    prevMyTurn = myTurn;
+    checkBust(v, me);
+  }
+
+  function renderSeats(v) {
+    const list = [];
+    v.seats.forEach((p, i) => { if (p) list.push([p, i]); });
+    const box = $('#bjSeats');
+    box.className = `bj-seats n${Math.max(1, list.length)}${isNet() ? ' multi' : ''}`;
+    box.innerHTML = list.map(([p, i]) => seatHtml(v, p, i)).join('');
+  }
+
+  function seatHtml(v, p, i) {
+    const you = i === v.you;
+    const turnSeat = v.phase === 'playing' && v.turn && v.turn.seat === i;
+    const hands = p.hands.map((h, k) => {
+      const active = turnSeat && v.turn.hand === k;
+      const res = h.result ? RESULT_FR[h.result] : null;
+      const resHtml = res
+        ? `<span class="bj-res ${res[1]}">${res[0]}${h.payout && h.result !== 'push' ? ' · ' + money(Number(h.payout)) : ''}</span>` : '';
+      return `<div class="bj-hand${active ? ' active' : ''}${h.result ? ' done-' + esc(h.result) : ''}">
+          <div class="bj-cards">${cardsHtml(h.cards)}</div>
+          <div class="bj-hand-info">
+            <span class="bj-total">${h.cards.length ? totalLabel(h.cards, h.done) : ''}</span>
+            <span class="bj-hand-bet">${money(Number(h.bet))}${h.doubled ? ' · doublée' : ''}</span>
+            ${resHtml}
+          </div>
+        </div>`;
+    }).join('');
+
+    let spot = '';
+    if (v.phase === 'betting' || p.bet > 0) {
+      const inner = p.bet > 0
+        ? `<div class="chip-stack big ${chipClass(p.bet)}">${shortAmount(p.bet)}</div><span class="spot-label">${money(p.bet)}</span>`
+        : `<span class="spot-label">${you ? 'Misez ici' : ''}</span>`;
+      spot = you && v.phase === 'betting'
+        ? `<button type="button" class="bj-spot" data-spot aria-label="Cercle de mise">${inner}</button>`
+        : `<div class="bj-spot other">${inner}</div>`;
+    }
+
+    let plate = '';
+    if (isNet()) {
+      let tag = '';
+      if (!p.connected) tag = '<span class="np-tag off">déconnecté</span>';
+      else if (v.phase === 'betting' && p.ready) tag = '<span class="np-tag ok">prêt</span>';
+      else if (p.insurance > 0) tag = '<span class="np-tag">assuré</span>';
+      else if (v.phase === 'insurance' && p.inRound && !p.insDecided) tag = '<span class="np-tag">réfléchit…</span>';
+      else if (v.showing && p.hands.length && typeof p.lastNet === 'number') tag = `<span class="np-tag ${netClass(p.lastNet)}">${signed(p.lastNet)}</span>`;
+      const name = String(p.name || '');
+      plate = `<div class="bj-plate">
+          <span class="pk-avatar" style="--hue:${hueOf(name)}">${esc(name.charAt(0).toUpperCase())}</span>
+          <span class="bj-pid"><b>${esc(name)}${you ? ' <small>(vous)</small>' : ''}</b><span>${money(Number(p.stack) || 0)}</span></span>
+          ${tag}
+          ${turnSeat && v.awaiting && v.deadlineFor === 'turn' ? '<div class="bj-timer"><i></i></div>' : ''}
+        </div>`;
+    }
+    return `<div class="bj-seat${you ? ' you' : ''}${turnSeat ? ' turn' : ''}${p.connected ? '' : ' offline'}">
+        <div class="bj-hands">${hands}</div>${spot}${plate}
+      </div>`;
+  }
+
+  function renderControls(v, me) {
+    const betting = v.phase === 'betting' && !!me;
+    const canIns = !!(v.me && v.me.canInsure);
+    const inPlay = !!me && me.inRound && !canIns && ['dealing', 'insurance', 'playing', 'dealer'].includes(v.phase);
+    $('#bjBetControls').hidden = !betting;
+    $('#bjInsControls').hidden = !canIns;
+    $('#bjPlayControls').hidden = !inPlay;
+
+    let wait = '';
+    if (!me) wait = 'Vous n’êtes pas assis à cette table.';
+    else if (!betting && !canIns && !inPlay) {
+      if (v.phase === 'settle') wait = 'Prochaine donne dans un instant…';
+      else wait = 'Main en cours : vous jouerez à la prochaine donne.';
+    }
+    const w = $('#bjWait');
+    w.textContent = wait;
+    w.hidden = !wait;
+
+    if (betting) {
+      const deal = $('#bjDealBtn');
+      deal.textContent = isNet() ? (me.ready ? 'Prêt ✓' : 'Je suis prêt') : 'Distribuer';
+      deal.disabled = me.bet <= 0 || me.ready;
+      $('#bjClearBtn').disabled = me.bet <= 0;
+      const lb = v.me ? v.me.lastBet : 0;
+      const rb = $('#bjRebetBtn');
+      rb.disabled = !lb || me.bet >= lb || lb - me.bet > me.stack;
+      rb.textContent = lb ? `Remiser ${money(lb)}` : 'Remiser';
+      for (const b of $('#bjChips').children) {
+        b.classList.toggle('selected', Number(b.dataset.value) === chip);
+        b.classList.toggle('dim', Number(b.dataset.value) > me.stack);
+      }
+      $('#bjBetHint').innerHTML = isNet()
+        ? 'Cliquez sur un jeton ou sur votre cercle pour miser · Clic droit sur le cercle&nbsp;: effacer · La donne part quand tous les joueurs sont prêts'
+        : 'Cliquez sur un jeton ou sur le cercle pour miser · Clic droit sur le cercle&nbsp;: effacer · <kbd>Entrée</kbd>&nbsp;: distribuer';
+    }
+    if (canIns) $('#bjInsYes').textContent = `Assurance (${money(me.hands[0].bet / 2)})`;
+    const L = (v.me && v.me.legal) || {};
+    for (const k of ['hit', 'stand', 'double', 'split', 'surrender']) $(`[data-bj="${k}"]`).disabled = !L[k];
+    // L'hôte peut fermer la table à tout moment (la main en cours est alors annulée)
+    $('#bjLeaveBtn').disabled = !!me && me.inRound && ctrl.mode !== 'host';
+  }
+
+  function renderSay(v, me) {
+    if (v.say && v.say.id !== lastSayId) {
+      lastSayId = v.say.id;
+      if (v.say.k === 'settle' && me && me.hands.length && me.lastNet > 0) Sound.win();
+    }
+    let text = '';
+    if (localSay && v.say && v.say.id === localSay.id) text = localSay.text;
+    else { localSay = null; text = sayText(v); }
+    if (text && text !== lastText) {
+      lastText = text;
+      $('#bjSay').textContent = text;
+    }
+  }
+
+  function renderAdvice(v) {
+    const box = $('#bjAdvice');
+    if (!$('#bjAdviceToggle').checked) {
+      box.innerHTML = '<p class="muted small">Conseils masqués. Victor vous signalera quand même les erreurs coûteuses.</p>';
+      return;
+    }
+    if (v.me && v.me.canInsure) {
+      const comp = unseen(v);
+      const tot = comp.reduce((a, b) => a + b, 0);
+      const pTen = comp[10] / tot;
+      const ev = 3 * pTen - 1;
+      box.innerHTML = `<p>Probabilité que ma carte cachée vaille 10 : <b>${(pTen * 100).toFixed(1).replace('.', ',')} %</b>.</p>
+        <p>L’assurance rapporte en moyenne <b class="${netClass(ev)}">${pct(ev)}</b> de son montant.</p>
+        <p class="advice-best">${ev > 0 ? '✓ Prenez l’assurance : le sabot est riche en 10.' : '✗ Refusez l’assurance (elle n’est rentable que si plus d’1 carte sur 3 vaut 10).'}</p>`;
+      return;
+    }
+    const adv = adviceFor(v);
+    if (adv) {
+      const rows = Object.entries(adv.ev).sort((a, b) => b[1] - a[1]);
+      const bestKey = adv.best;
+      const second = rows.find(([k]) => k !== bestKey);
+      const abs = (x) => `${Math.abs(x * 100).toFixed(1).replace('.', ',')} %`;
+      let why = `Je vous conseille de <b>${ACT_VERB[bestKey]}</b>`;
+      if (second) why += ` : vous ${adv.ev[bestKey] >= 0 ? 'gagnez' : 'perdez'} en moyenne ${abs(adv.ev[bestKey])} de la mise, contre ${abs(second[1])} ${second[1] >= 0 ? 'de gain' : 'de perte'} en choisissant de ${ACT_VERB[second[0]]}.`;
+      const up = handTotal([v.dealer[0]]).t;
+      box.innerHTML = `<div class="ev-list">${rows.map(([k, x]) => `
+          <div class="ev-row${k === bestKey ? ' best' : ''}">
+            <span>${k === bestKey ? '✓ ' : ''}${ACT_FR[k]}</span>
+            <span class="ev-bar"><i style="width:${Math.round(((x + 1) / 3) * 100)}%"></i></span>
+            <b class="${netClass(x)}">${pct(x)}</b>
+          </div>`).join('')}</div>
+        <p class="small">${why}</p>
+        <p class="muted small">Risque que je saute avec mon ${up === 11 ? 'as' : up} : <b>${(adv.bust * 100).toFixed(0)} %</b>. Calcul exact à partir des ${unseen(v).reduce((a, b) => a + b, 0)} cartes encore inconnues.</p>`;
+      return;
+    }
+    if (v.phase === 'betting') {
+      box.innerHTML = isNet()
+        ? '<p class="small">Posez votre mise puis cliquez sur « Je suis prêt ». Pendant votre tour, j’affiche ici l’espérance de gain de chaque option, calculée en direct sur les cartes qui restent dans le sabot.</p>'
+        : '<p class="small">Posez votre mise puis distribuez. Pendant la main, j’affiche ici l’espérance de gain de chaque option, calculée en direct sur les cartes qui restent dans le sabot.</p>';
+      return;
+    }
+    box.innerHTML = '<p class="muted small">…</p>';
+  }
+
+  function renderCount(v) {
+    const box = $('#bjCount');
+    if (!$('#bjCountToggle').checked) {
+      box.innerHTML = '<p class="muted small">Activez pour voir le comptage Hi-Lo des cartes sorties.</p>';
+      return;
+    }
+    let running = 0;
+    for (let x = 1; x <= 10; x++) running += (Number(v.seen[x]) || 0) * BC.hiLoV(x);
+    const unknown = (Number(v.shoeLeft) || 0) + (v.holeHidden && v.dealer.length > 1 ? 1 : 0);
+    const decks = Math.max(0.25, unknown / 52);
+    const tc = running / decks;
+    const edge = -0.0045 + 0.005 * tc;
+    box.innerHTML = `<div class="count-grid">
+        <div><span>Compte courant</span><b>${running > 0 ? '+' : ''}${running}</b></div>
+        <div><span>Compte réel</span><b>${tc > 0 ? '+' : ''}${tc.toFixed(1).replace('.', ',')}</b></div>
+        <div><span>Jeux restants</span><b>${decks.toFixed(1).replace('.', ',')}</b></div>
+        <div><span>Avantage estimé</span><b class="${netClass(edge)}">${pct(edge, 2)}</b></div>
+      </div>
+      <p class="muted small">${tc >= 2 ? 'Le sabot est favorable au joueur : c’est le moment où un compteur augmente sa mise.' : tc <= -1 ? 'Sabot défavorable : beaucoup de 10 et d’as sont déjà sortis.' : 'Sabot neutre.'}</p>`;
+  }
+
+  function renderStats(v) {
+    const st = (v.me && v.me.stats) || { rounds: 0, wins: 0, losses: 0, pushes: 0, bj: 0, net: 0 };
+    $('#bjStats').innerHTML = `<div class="count-grid">
+        <div><span>Mains</span><b>${Number(st.rounds) || 0}</b></div>
+        <div><span>Gagnées</span><b>${Number(st.wins) || 0}</b></div>
+        <div><span>Perdues</span><b>${Number(st.losses) || 0}</b></div>
+        <div><span>Égalités</span><b>${Number(st.pushes) || 0}</b></div>
+        <div><span>Blackjacks</span><b>${Number(st.bj) || 0}</b></div>
+        <div><span>Bilan</span><b class="${netClass(st.net)}">${signed(Number(st.net) || 0)}</b></div>
+      </div>`;
+  }
+
+  /** Compte à rebours (mise, assurance, tour de jeu) : mis à jour plusieurs fois par seconde. */
+  function tick() {
+    const v = view;
+    if (!v) return;
+    const total = (v.times && v.times[v.deadlineFor]) || 0;
+    const left = deadlineAt ? Math.max(0, deadlineAt - performance.now()) : 0;
+    const frac = total ? clamp(left / total, 0, 1) : 0;
+    for (const bar of $$('#blackjack .bj-timer i')) {
+      bar.style.width = `${frac * 100}%`;
+      bar.classList.toggle('late', left < 8000);
+    }
+    const line = $('#bjTimerLine');
+    let txt = '';
+    if (deadlineAt && left > 0) {
+      const s = Math.ceil(left / 1000);
+      if (v.deadlineFor === 'bet') txt = `Distribution dans ${s} s`;
+      else if (v.deadlineFor === 'ins') txt = `Décision d’assurance : ${s} s`;
+      else if (v.deadlineFor === 'turn' && v.me && v.me.legal) txt = `À vous : ${s} s pour jouer, sinon vous restez`;
+    }
+    line.textContent = txt;
+    line.hidden = !txt;
+  }
+
+  function checkBust(v, me) {
+    const broke = me && me.stack < 1 && me.bet <= 0 && !me.inRound && v.phase === 'betting';
+    if (!broke) {
+      clearTimeout(bustTimer);
+      bustTimer = 0;
+      if (me && me.stack >= 1) bustShown = false;
+      return;
+    }
+    if (bustTimer || bustShown) return;
+    bustTimer = setTimeout(async () => {
+      bustTimer = 0;
+      const m = meOf(view);
+      if (!ctrl || !m || m.stack >= 1 || m.bet > 0 || m.inRound || document.querySelector('dialog[open]')) return;
+      bustShown = true;
+      if (!isNet()) {
+        await infoBox('Plus de jetons',
+          '<p>Votre portefeuille est vide. Retournez au hall : vous pourrez le recharger à la caisse si vous souhaitez continuer.</p>',
+          'Retour au hall');
+        leave(true);
+      } else if (await confirmBox('Plus de jetons', '<p>Vous n’avez plus de jetons à cette table.</p>', 'Quitter la table', 'Rester regarder')) {
+        leave(true);
+      }
+    }, 1600);
   }
 
   // ---------------------------------------------------------------
-  // Entrée / sortie
+  // Ouverture d'une table
   // ---------------------------------------------------------------
-  function enter() {
-    S.phase = 'betting';
-    S.busy = false;
-    if (!S.shoe.length) newShoe();
-    if (!S.stats.rounds) say(pick(LINES.welcome));
+  function resetSession() {
+    view = null;
+    seenIds = new Set();
+    hiddenIds = new Set();
+    flipped = new Set();
+    localSay = null;
+    lastText = '';
+    lastSayId = -1;
+    prevBet = 0;
+    prevMyTurn = false;
+    bustShown = false;
+    clearTimeout(bustTimer);
+    bustTimer = 0;
+  }
+  function openTable(stack) {
+    if (!chip || chip > stack) chip = Math.max(1, CHIP_VALUES.filter((c) => c <= stack / 20).pop() || 1);
+    if (isNet()) Net.mountPanel($('#bjNetSlot'), ctrl);
+    else Net.hidePanel();
     showScreen('blackjack');
+    clearInterval(ticker);
+    ticker = setInterval(tick, 200);
     render();
   }
-  function leave() {
-    if (S.phase !== 'betting' || S.busy) { toast('Terminez d’abord la main en cours.'); return; }
-    if (S.bet) { Wallet.give(S.bet); S.bet = 0; }
-    clearIfShowing();
-    S.phase = 'closed';
+  function closeSession() {
+    ctrl = null;
+    view = null;
+    clearInterval(ticker);
+    clearTimeout(bustTimer);
+    Net.hidePanel();
+  }
+
+  /** Blackjack en solo : le portefeuille entier est apporté à la table. */
+  function enter() {
+    if (!soloTable) {
+      soloTable = new BC.Table({
+        seats: 1,
+        onUpdate: () => { if (ctrl && ctrl.mode === 'solo') onView(soloTable.view('me')); },
+      });
+    }
+    const stack = Wallet.balance;
+    Wallet.take(stack);
+    ctrl = {
+      mode: 'solo',
+      send: (m) => { const e = soloTable.apply('me', m); if (e) toast(e); },
+      leave: async () => {
+        const s = soloTable.removePlayer('me');
+        return s === null ? { error: 'Terminez d’abord la main en cours.' } : { stack: s };
+      },
+    };
+    resetSession();
+    soloTable.addPlayer({ id: 'me', name: 'Vous', stack });
+    openTable(stack);
+  }
+
+  /** Table entre amis : ce navigateur fait tourner la table et distribue les cartes. */
+  function startHost(peer, code, cfg) {
+    let room = null;
+    const table = new BC.Table({
+      seats: 5, betTime: 20000, turnTime: 30000, insTime: 15000, resultTime: 3500,
+      onUpdate: () => { if (room) room.broadcast(); },
+    });
+    const game = {
+      type: 'blackjack',
+      info: () => {
+        const n = table.players().length;
+        return {
+          detail: `${n} joueur${n > 1 ? 's' : ''} · mise de 1 € à ${money(table.o.maxBet)}`,
+          free: table.seats.filter((s) => !s).length,
+          buyIn: { min: 10, max: 100000, step: 1 },
+        };
+      },
+      join: (id, name, stack) => (table.addPlayer({ id, name, stack }) < 0 ? 'La table est complète (5 joueurs).' : ''),
+      view: (id) => table.view(id),
+      handle: (id, m) => { const e = table.apply(id, m); return e ? { t: 'err', msg: e } : null; },
+      setConnected: (id, ok) => table.setConnected(id, ok),
+      leave: (id) => {
+        const s = table.removePlayer(id);
+        return s === null ? { error: 'Terminez d’abord la main en cours.' } : { stack: s };
+      },
+      canDrop: (id) => table.canLeave(id),
+      closeAll: () => {
+        table.cancel();
+        const m = new Map();
+        for (const p of table.players()) m.set(p.id, p.stack);
+        return m;
+      },
+    };
+    const c = { mode: 'host' };
+    room = Net.host(peer, code, cfg.name, game, (v) => { if (ctrl === c) onView(v); });
+    c.room = room;
+    c.send = (m) => { const e = table.apply('host', m); if (e) toast(e); };
+    c.chat = (t) => room.chat(t);
+    c.leave = async () => ({ stack: room.close() });
+    ctrl = c;
+    resetSession();
+    table.addPlayer({ id: 'host', name: cfg.name, stack: cfg.buyIn }, 2);
+    openTable(cfg.buyIn);
+  }
+
+  /** Invité : la table tourne chez l'hôte. */
+  function startGuest(peer, conn, code, token) {
+    const c = { mode: 'guest' };
+    const g = Net.guest(peer, conn, code, token, {
+      onView: (v) => { if (ctrl === c) onView(v); },
+      onEnd: (stack, msg) => {
+        if (ctrl !== c) return;
+        closeSession();
+        if (stack > 0) Wallet.give(stack);
+        infoBox('Table fermée', `<p>${esc(msg)}</p><p>Vous récupérez <b>${money(stack)}</b>.</p>`, 'Retour au hall').then(backToHall);
+      },
+      onAbort: () => { if (ctrl === c) { closeSession(); backToHall(); } },
+    });
+    c.send = (m) => g.send(m);
+    c.chat = (t) => g.chat(t);
+    c.leave = () => g.leave();
+    ctrl = c;
+    resetSession();
+    openTable(Wallet.balance);
+  }
+
+  async function leave(skipConfirm) {
+    if (!ctrl) return;
+    const me = meOf(view);
+    const c = ctrl;
+    if (me && me.inRound && c.mode !== 'host') { toast('Terminez d’abord la main en cours.'); return; }
+    if (c.mode !== 'solo' && !skipConfirm) {
+      const inHand = me && me.inRound ? me.hands.reduce((a, h) => a + h.bet, 0) + me.insurance : 0;
+      const total = me ? me.stack + me.bet + inHand : 0;
+      let html = `<p>Vous repartez avec <b>${money(total)}</b>${me && (me.bet || inHand) ? ' (vos mises vous sont rendues)' : ''}.</p>`;
+      if (c.mode === 'host') {
+        html += c.room.guestCount() > 0
+          ? '<p><b>Vous êtes l’hôte :</b> la table sera fermée, la main en cours annulée et chaque joueur récupérera ses jetons.</p>'
+          : '<p class="muted">La table sera fermée.</p>';
+      }
+      if (!(await confirmBox(c.mode === 'host' ? 'Fermer la table ?' : 'Quitter la table ?', html, 'Quitter la table', 'Rester'))) return;
+      if (ctrl !== c) return;
+    }
+    const r = await c.leave();
+    if (r.error) { toast(r.error); return; }
+    if (ctrl !== c) return;
+    closeSession();
+    if (r.stack > 0) Wallet.give(r.stack);
+    if (c.mode !== 'solo') toast(`Vous repartez avec ${money(r.stack)}.`, 'ok');
     backToHall();
   }
 
   // ---------------------------------------------------------------
   // Événements
   // ---------------------------------------------------------------
+  function buildChips() {
+    const box = $('#bjChips');
+    box.innerHTML = CHIP_VALUES.map((v) => `<button type="button" class="chip c${v}" data-value="${v}" aria-label="Jeton de ${money(v)}"><span>${v >= 1000 ? v / 1000 + 'k' : v}</span></button>`).join('');
+    box.addEventListener('click', (e) => {
+      const b = e.target.closest('.chip');
+      if (!b) return;
+      chip = Number(b.dataset.value);
+      placeChip(chip);
+    });
+  }
   buildChips();
-  $('#bjSpot').addEventListener('click', () => placeChip(S.chip));
-  $('#bjSpot').addEventListener('contextmenu', (e) => { e.preventDefault(); clearBet(); });
-  $('#bjDealBtn').addEventListener('click', deal);
-  $('#bjClearBtn').addEventListener('click', clearBet);
-  $('#bjRebetBtn').addEventListener('click', rebet);
-  $('#bjInsYes').addEventListener('click', () => insurance(true));
-  $('#bjInsNo').addEventListener('click', () => insurance(false));
+  $('#bjSeats').addEventListener('click', (e) => { if (e.target.closest('[data-spot]')) placeChip(chip); });
+  $('#bjSeats').addEventListener('contextmenu', (e) => {
+    if (!e.target.closest('[data-spot]')) return;
+    e.preventDefault();
+    send({ t: 'clear' });
+  });
+  $('#bjDealBtn').addEventListener('click', ready);
+  $('#bjClearBtn').addEventListener('click', () => send({ t: 'clear' }));
+  $('#bjRebetBtn').addEventListener('click', () => send({ t: 'rebet' }));
+  $('#bjInsYes').addEventListener('click', () => { Sound.chip(); send({ t: 'ins', take: true }); });
+  $('#bjInsNo').addEventListener('click', () => send({ t: 'ins', take: false }));
   $('#bjPlayControls').addEventListener('click', (e) => {
     const b = e.target.closest('[data-bj]');
     if (b && !b.disabled) act(b.dataset.bj);
   });
-  $('#bjLeaveBtn').addEventListener('click', leave);
+  $('#bjLeaveBtn').addEventListener('click', () => leave(false));
   $('#bjRulesBtn').addEventListener('click', () => $('#bjRulesDlg').showModal());
   $('#bjAdviceToggle').addEventListener('change', render);
   $('#bjCountToggle').addEventListener('change', render);
 
   const KEYS = { t: 'hit', h: 'hit', r: 'stand', s: 'stand', d: 'double', p: 'split', a: 'surrender' };
   document.addEventListener('keydown', (e) => {
-    if (!$('#blackjack').classList.contains('active') || document.querySelector('dialog[open]')) return;
+    if (!$('#blackjack').classList.contains('active') || document.querySelector('dialog[open]') || !view) return;
     if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
-    if (S.phase === 'playing' && KEYS[k]) { e.preventDefault(); act(KEYS[k]); }
-    else if (S.phase === 'betting' && (e.key === 'Enter' || e.code === 'Space')) { e.preventDefault(); if (!e.repeat) deal(); }
+    if (view.me && view.me.legal && KEYS[k]) { e.preventDefault(); act(KEYS[k]); }
+    else if (view.phase === 'betting' && (e.key === 'Enter' || e.code === 'Space')) { e.preventDefault(); if (!e.repeat) ready(); }
   });
 
-  return { enter, leave, _test: { playerEV, dealerDist } };
+  Net.register('blackjack', {
+    readCreate() {
+      const buyIn = Number($('#netCreateCave').value);
+      if (!(buyIn >= 10)) { toast('Il faut au moins 10 € pour ouvrir une table.'); return null; }
+      return { buyIn };
+    },
+    startHost,
+    startGuest,
+  });
+
+  return { enter, leave, _test: { playerEV: BC.playerEV, dealerDist: BC.dealerDist } };
 })();

@@ -12,7 +12,6 @@ const PokerUI = (() => {
   const LAYOUTS = { 1: [3], 2: [2, 4], 3: [2, 3, 4], 4: [1, 2, 4, 5], 5: [1, 2, 3, 4, 5] };
   const BOT_SEATS = [3, 1, 5, 2, 4];
   const TURN_TIMEOUT = 40000;     // délai pour jouer à une table entre amis
-  const GONE_AFTER = 120000;      // un invité déconnecté plus de 2 min quitte la table
 
   let ctrl = null;   // contrôleur actif (solo, hôte ou invité)
   let view = null;   // dernier état reçu
@@ -23,26 +22,7 @@ const PokerUI = (() => {
   let deadlineAt = 0;
   let timerRaf = 0;
 
-  const cleanText = (s, max) => String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f<>]/g, '').trim().slice(0, max);
-  const randomHex = (words = 4) => {
-    const a = new Uint32Array(words);
-    RNG.getRandomValues(a);
-    return [...a].map((x) => x.toString(16).padStart(8, '0')).join('');
-  };
   const isNet = () => ctrl && (ctrl.mode === 'host' || ctrl.mode === 'guest');
-
-  // Avertit avant de fermer la page pendant une partie entre amis.
-  const warnUnload = (e) => { e.preventDefault(); e.returnValue = ''; };
-
-  // ---------------------------------------------------------------
-  // Pseudo
-  // ---------------------------------------------------------------
-  function savedName() {
-    try { return localStorage.getItem('zdo-name') || ''; } catch (e) { return ''; }
-  }
-  function saveName(n) {
-    try { localStorage.setItem('zdo-name', n); } catch (e) { /* ignore */ }
-  }
 
   // ---------------------------------------------------------------
   // Contrôles de cave (blindes + montant), partagés par les dialogues
@@ -93,21 +73,10 @@ const PokerUI = (() => {
     return {
       reset(fixed) { if (fixed) blinds = fixed; renderBlinds(); if (!seg) markBlinds(); },
       get blinds() { return blinds; },
-      set blinds(b) { blinds = b; markBlinds(); },
       get buyIn() { return Number(range.value); },
       valid() { return Wallet.balance >= blinds[1] * 10; },
     };
   }
-
-  function segValue(id) {
-    const on = $(`#${id} .seg-btn.on`);
-    return on ? on.dataset.v : null;
-  }
-  document.addEventListener('click', (e) => {
-    const b = e.target.closest('.seg[data-simple] .seg-btn');
-    if (!b) return;
-    for (const x of b.parentElement.children) x.classList.toggle('on', x === b);
-  });
 
   // ---------------------------------------------------------------
   // Mode solo
@@ -122,22 +91,23 @@ const PokerUI = (() => {
     if (!soloStake.valid()) return;
     const n = Number(segValue('pkSoloOpp') || 4);
     const difficulty = segValue('pkSoloDiff') || 'normal';
+    const blindUp = (Number(segValue('pkSoloBlindUp')) || 0) * 60000;
     const [sb, bb] = soloStake.blinds;
     const buyIn = soloStake.buyIn;
     if (!Wallet.take(buyIn)) { toast('Solde insuffisant.'); return; }
     $('#pkSoloDlg').close();
-    startSolo({ n, sb, bb, buyIn, difficulty });
+    startSolo({ n, sb, bb, buyIn, difficulty, blindUp });
   });
 
-  function startSolo({ n, sb, bb, buyIn, difficulty }) {
+  function startSolo({ n, sb, bb, buyIn, difficulty, blindUp }) {
     const runner = new PokerCore.Runner({
-      sb, bb, difficulty,
+      sb, bb, difficulty, blindUp,
       onUpdate: () => onView(runner.view(runner.seatOf('me'))),
     });
     ctrl = {
       mode: 'solo',
       act: (a) => runner.act('me', a),
-      leave: async () => { const s = runner.removePlayer('me'); runner.stop(); return s; },
+      leave: async () => { const s = runner.removePlayer('me'); runner.stop(); return { stack: s }; },
       rebuy: async (amt) => runner.rebuy('me', amt),
     };
     resetTableState();
@@ -147,415 +117,164 @@ const PokerUI = (() => {
   }
 
   // ---------------------------------------------------------------
-  // Peer-to-peer : créer une table (hôte)
+  // Table entre amis : hôte (le dialogue « Créer une table » est dans net.js)
   // ---------------------------------------------------------------
-  const createStake = stakeControls('pkCreate');
-  function openCreate() {
-    createStake.reset();
-    if (!createStake.valid()) { toast('Il faut au moins 20 € pour ouvrir une table.'); return; }
-    $('#pkCreateName').value = savedName();
-    $('#pkCreateDlg').showModal();
-  }
-  $('#pkCreateGo').addEventListener('click', async () => {
-    const btn = $('#pkCreateGo');
-    const name = cleanText($('#pkCreateName').value, 16);
-    if (!name) { toast('Choisissez un pseudo.'); $('#pkCreateName').focus(); return; }
-    if (!createStake.valid()) return;
-    const [sb, bb] = createStake.blinds;
-    const buyIn = createStake.buyIn;
-    if (buyIn > Wallet.balance) { toast('Solde insuffisant.'); return; }
-    const bots = Number(segValue('pkCreateBots') || 0);
-    const difficulty = segValue('pkCreateDiff') || 'normal';
-    btn.disabled = true;
-    btn.textContent = 'Ouverture de la table…';
-    try {
-      const { peer, code } = await P2P.openHost();
-      saveName(name);
-      Wallet.take(buyIn);
-      $('#pkCreateDlg').close();
-      startHost(peer, code, { name, sb, bb, buyIn, bots, difficulty });
-    } catch (e) {
-      toast(e.message);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Créer la table';
-    }
-  });
+  const createStake = stakeControls('netCreate');
 
   function startHost(peer, code, cfg) {
-    const guests = new Map(); // jeton secret → { id, name, conn, lastSeen }
-    const chat = [];
-    let closed = false;
-    const safeSend = (c, m) => { try { if (c && c.open) c.send(m); } catch (e) { /* connexion fermée */ } };
-    const guestOf = (c) => { for (const g of guests.values()) if (g.conn === c) return g; return null; };
-    const freeSeats = () => runner.table.seats.filter((s) => !s).length;
-    const roomInfo = (isHost) => ({ code, isHost, chat: chat.slice(-40), invite: P2P.inviteLink(code) });
-    const viewOf = (id, isHost) => {
-      const v = runner.view(runner.seatOf(id));
-      v.room = roomInfo(isHost);
-      return v;
-    };
-    function broadcast() {
-      if (closed) return;
-      onView(viewOf('host', true));
-      for (const g of guests.values()) if (g.conn) safeSend(g.conn, { t: 'view', v: viewOf(g.id, false) });
-    }
-
+    let room = null;
     const runner = new PokerCore.Runner({
-      sb: cfg.sb, bb: cfg.bb, difficulty: cfg.difficulty, humanTimeout: TURN_TIMEOUT,
-      onUpdate: broadcast,
+      sb: cfg.sb, bb: cfg.bb, difficulty: cfg.difficulty, humanTimeout: TURN_TIMEOUT, blindUp: cfg.blindUp,
+      onUpdate: () => { if (room) room.broadcast(); },
     });
-
-    // Messages des invités (données non fiables : tout est vérifié ici)
-    function handle(conn, msg) {
-      if (!msg || typeof msg !== 'object' || typeof msg.t !== 'string') return;
-      const g = guestOf(conn);
-      if (msg.t === 'hello') {
-        safeSend(conn, { t: 'info', host: cfg.name, sb: cfg.sb, bb: cfg.bb, free: freeSeats() });
-        return;
-      }
-      if (msg.t === 'join') {
-        if (g) return;
-        const name = cleanText(msg.name, 16) || 'Invité';
-        const stack = Math.floor(Number(msg.buyIn));
-        if (!Number.isFinite(stack) || stack < cfg.bb * 10 || stack > cfg.bb * 200) {
-          safeSend(conn, { t: 'error', msg: `La cave doit être comprise entre ${money(cfg.bb * 10)} et ${money(cfg.bb * 200)}.` });
-          return;
-        }
-        if (runner.table.seats.some((s) => s && s.name.toLowerCase() === name.toLowerCase())) {
-          safeSend(conn, { t: 'error', msg: 'Ce pseudo est déjà pris à cette table.' });
-          return;
-        }
-        const token = randomHex();
-        const ng = { id: 'g' + randomHex(2), name, conn, lastSeen: Date.now() };
-        guests.set(token, ng);
-        if (runner.addPlayer({ id: ng.id, name, stack }) < 0) {
-          guests.delete(token);
-          safeSend(conn, { t: 'error', msg: 'La table est complète.' });
-          return;
-        }
-        safeSend(conn, { t: 'joined', token });
-        broadcast();
-        return;
-      }
-      if (msg.t === 'resume') {
-        const rg = guests.get(String(msg.token));
-        if (!rg) { safeSend(conn, { t: 'gone' }); return; }
-        rg.conn = conn;
-        rg.lastSeen = Date.now();
-        runner.setConnected(rg.id, true); // renvoie aussi l'état à jour
-        return;
-      }
-      if (!g) return;
-      if (msg.t === 'act') {
-        const type = ['fold', 'check', 'call', 'raise'].includes(msg.type) ? msg.type : null;
-        if (type) runner.act(g.id, { type, amount: Number(msg.amount) || 0 });
-      } else if (msg.t === 'chat') {
-        const text = cleanText(msg.text, 200);
-        if (text) { chat.push({ name: g.name, text }); if (chat.length > 100) chat.shift(); broadcast(); }
-      } else if (msg.t === 'rebuy') {
-        const amt = Math.floor(Number(msg.amount));
-        const ok = Number.isFinite(amt) && amt >= cfg.bb * 10 && amt <= cfg.bb * 200 && runner.rebuy(g.id, amt);
-        safeSend(conn, { t: 'rebuy', ok: !!ok, msg: ok ? '' : 'Recave impossible pendant la main.' });
-      } else if (msg.t === 'leave') {
-        for (const [tok, x] of guests) if (x === g) guests.delete(tok);
-        const stack = runner.removePlayer(g.id);
-        safeSend(conn, { t: 'left', stack });
-        setTimeout(() => conn.close(), 600);
-      }
-    }
-
-    peer.on('connection', (conn) => {
-      if (closed) { conn.close(); return; }
-      conn.on('data', (msg) => { try { handle(conn, msg); } catch (e) { console.error(e); } });
-      conn.on('close', () => {
-        const g = guestOf(conn);
-        if (g) { g.conn = null; g.lastSeen = Date.now(); runner.setConnected(g.id, false); }
-      });
-      conn.on('error', () => { /* géré par « close » */ });
-    });
-    // Perte du service de mise en relation : les connexions existantes continuent,
-    // on se ré-enregistre pour que de nouveaux amis puissent rejoindre.
-    peer.on('disconnected', () => {
-      setTimeout(() => { if (!closed && peer.disconnected && !peer.destroyed) peer.reconnect(); }, 2000);
-    });
-    peer.on('error', (e) => { if (!closed && e && e.type !== 'peer-unavailable') console.warn('P2P', e.type, e); });
-
-    const maint = setInterval(() => {
-      const now = Date.now();
-      for (const [tok, g] of guests) {
-        if (!g.conn && now - g.lastSeen > GONE_AFTER) {
-          guests.delete(tok);
-          runner.removePlayer(g.id);
-        }
-      }
-    }, 10000);
-
-    ctrl = {
-      mode: 'host',
-      act: (a) => runner.act('host', a),
-      rebuy: async (amt) => runner.rebuy('host', amt),
-      chat: (text) => {
-        const t = cleanText(text, 200);
-        if (t) { chat.push({ name: cfg.name, text: t }); if (chat.length > 100) chat.shift(); broadcast(); }
+    const game = {
+      type: 'poker',
+      info: () => ({
+        detail: `blindes ${money(runner.table.sb)} / ${money(runner.table.bb)}`
+          + (cfg.blindUp ? ` · elles montent toutes les ${Math.round(cfg.blindUp / 60000)} min` : ''),
+        free: runner.table.seats.filter((s) => !s).length,
+        bb: cfg.bb,
+        buyIn: { min: cfg.bb * 10, max: cfg.bb * 200, step: cfg.bb, def: cfg.bb * 100 },
+      }),
+      join(id, name, stack) {
+        if (runner.table.seats.some((s) => s && s.name.toLowerCase() === name.toLowerCase())) return 'Ce pseudo est déjà pris à cette table.';
+        return runner.addPlayer({ id, name, stack }) < 0 ? 'La table est complète.' : '';
       },
-      bot: (op) => {
-        const seats = runner.table.seats;
-        if (op === 'add') {
-          const free = BOT_SEATS.find((i) => !seats[i]);
-          if (free === undefined) toast('Plus de place à la table.');
-          else runner.addBot(free);
-        } else {
-          const bot = [...seats].reverse().find((s) => s && s.isBot && !s.leaving);
-          if (bot) runner.removePlayer(bot.id); else toast('Aucune IA à retirer.');
+      view: (id) => runner.view(runner.seatOf(id)),
+      handle(id, msg) {
+        if (msg.t === 'act') {
+          const type = ['fold', 'check', 'call', 'raise'].includes(msg.type) ? msg.type : null;
+          if (type) runner.act(id, { type, amount: Number(msg.amount) || 0 });
+          return null;
         }
+        if (msg.t === 'rebuy') {
+          const amt = Math.floor(Number(msg.amount));
+          const ok = Number.isFinite(amt) && amt >= cfg.bb * 10 && amt <= cfg.bb * 200 && runner.rebuy(id, amt);
+          return { t: 'rebuy', ok: !!ok };
+        }
+        return null;
       },
-      guestCount: () => [...guests.values()].length,
-      leave: async () => {
-        // Fermeture de la table : la main en cours est annulée (mises rendues),
-        // puis chaque ami récupère son tapis.
-        closed = true;
-        clearInterval(maint);
+      setConnected: (id, ok) => runner.setConnected(id, ok),
+      leave: (id) => ({ stack: runner.removePlayer(id) }),
+      canDrop: () => true,
+      // Fermeture : la main en cours est annulée (mises rendues), puis chacun récupère son tapis.
+      closeAll() {
         runner.stop();
         runner.cancelHand();
-        for (const g of guests.values()) {
-          const stack = runner.removePlayer(g.id);
-          safeSend(g.conn, { t: 'closed', stack });
-        }
-        guests.clear();
-        const stack = runner.removePlayer('host');
+        const m = new Map();
+        for (const s of [...runner.table.seats]) if (s && !s.isBot) m.set(s.id, runner.removePlayer(s.id));
         runner.stop();
-        setTimeout(() => peer.destroy(), 1200);
-        return stack;
+        return m;
       },
     };
+    const c = { mode: 'host' };
+    room = Net.host(peer, code, cfg.name, game, (v) => { if (ctrl === c) onView(v); });
+    c.room = room;
+    c.act = (a) => runner.act('host', a);
+    c.rebuy = async (amt) => runner.rebuy('host', amt);
+    c.chat = (t) => room.chat(t);
+    c.bot = (op) => {
+      const seats = runner.table.seats;
+      if (op === 'add') {
+        const free = BOT_SEATS.find((i) => !seats[i]);
+        if (free === undefined) toast('Plus de place à la table.');
+        else runner.addBot(free);
+      } else {
+        const bot = [...seats].reverse().find((s) => s && s.isBot && !s.leaving);
+        if (bot) runner.removePlayer(bot.id); else toast('Aucune IA à retirer.');
+      }
+    };
+    c.guestCount = () => room.guestCount();
+    c.leave = async () => ({ stack: room.close() });
+    ctrl = c;
     resetTableState();
-    window.addEventListener('beforeunload', warnUnload);
     runner.addPlayer({ id: 'host', name: cfg.name, stack: cfg.buyIn }, 0);
     for (let k = 0; k < cfg.bots; k++) runner.addBot(BOT_SEATS[k]);
     openTable();
   }
 
   // ---------------------------------------------------------------
-  // Peer-to-peer : rejoindre une table (invité)
+  // Table entre amis : invité
   // ---------------------------------------------------------------
-  let joinSession = null; // connexion ouverte pendant le dialogue
-  const joinStake = stakeControls('pkJoin', [1, 2]);
-
-  function joinStep(n) {
-    $('#pkJoinStep1').hidden = n !== 1;
-    $('#pkJoinStep2').hidden = n !== 2;
-  }
-  function dropJoinSession() {
-    if (joinSession && !joinSession.kept) {
-      try { joinSession.peer.destroy(); } catch (e) { /* ignore */ }
-    }
-    joinSession = null;
-  }
-
-  function openJoin(code) {
-    dropJoinSession();
-    $('#pkJoinName').value = savedName();
-    $('#pkJoinCode').value = code ? P2P.normalize(code) : '';
-    joinStep(1);
-    $('#pkJoinDlg').showModal();
-    if (code && savedName()) $('#pkJoinConnect').focus();
-  }
-  $('#pkJoinDlg').addEventListener('close', dropJoinSession);
-  $('#pkJoinBack').addEventListener('click', () => { dropJoinSession(); joinStep(1); });
-
-  $('#pkJoinConnect').addEventListener('click', async () => {
-    const btn = $('#pkJoinConnect');
-    const name = cleanText($('#pkJoinName').value, 16);
-    const code = P2P.normalize($('#pkJoinCode').value);
-    if (!name) { toast('Choisissez un pseudo.'); $('#pkJoinName').focus(); return; }
-    if (code.length < 4) { toast('Entrez le code de la table que votre ami vous a donné.'); $('#pkJoinCode').focus(); return; }
-    btn.disabled = true;
-    btn.textContent = 'Connexion…';
-    dropJoinSession();
-    try {
-      const peer = await P2P.openGuest();
-      const session = { peer, conn: null, code, name, kept: false };
-      joinSession = session;
-      const conn = await P2P.dial(peer, code);
-      if (joinSession !== session) { conn.close(); return; }
-      session.conn = conn;
-      conn.on('data', (msg) => onJoinData(session, msg));
-      conn.on('close', () => {
-        if (joinSession === session && !session.kept) { toast('Connexion à l’hôte perdue.'); dropJoinSession(); joinStep(1); }
-      });
-      conn.send({ t: 'hello' });
-    } catch (e) {
-      dropJoinSession();
-      toast(e.message || 'Connexion impossible.');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Se connecter';
-    }
-  });
-
-  function onJoinData(session, msg) {
-    if (joinSession !== session || !msg || typeof msg !== 'object') return;
-    if (msg.t === 'info') {
-      const sb = Number(msg.sb);
-      const bb = Number(msg.bb);
-      session.bb = bb;
-      $('#pkJoinInfo').innerHTML = `Table de <b>${esc(cleanText(msg.host, 16))}</b> · blindes ${money(sb)} / ${money(bb)} · `
-        + `${Number(msg.free) > 0 ? `${Number(msg.free)} place${msg.free > 1 ? 's' : ''} libre${msg.free > 1 ? 's' : ''}` : 'table complète'}`;
-      joinStake.reset([sb, bb]);
-      $('#pkJoinGo').disabled = !joinStake.valid() || !(Number(msg.free) > 0);
-      if (!joinStake.valid()) toast(`Il faut au moins ${money(bb * 10)} pour cette table.`);
-      joinStep(2);
-    } else if (msg.t === 'error') {
-      toast(cleanText(msg.msg, 200) || 'Impossible de rejoindre.');
-      $('#pkJoinGo').disabled = false;
-    } else if (msg.t === 'joined') {
-      const buyIn = session.pendingBuyIn;
-      if (!Wallet.take(buyIn)) { session.conn.send({ t: 'leave' }); return; }
-      session.kept = true;
-      saveName(session.name);
-      joinSession = null;
-      $('#pkJoinDlg').close();
-      if (location.hash) history.replaceState(null, '', location.pathname + location.search);
-      startGuest(session.peer, session.conn, session.code, String(msg.token));
-    }
-  }
-
-  $('#pkJoinGo').addEventListener('click', () => {
-    const s = joinSession;
-    if (!s || !s.conn) { joinStep(1); return; }
-    const buyIn = joinStake.buyIn;
-    if (buyIn > Wallet.balance) { toast('Solde insuffisant.'); return; }
-    s.pendingBuyIn = buyIn;
-    $('#pkJoinGo').disabled = true;
-    s.conn.send({ t: 'join', name: s.name, buyIn });
-  });
-
   function startGuest(peer, conn, code, token) {
-    let ended = false;
-    let retries = 0;
-    const waiters = {}; // type de réponse → résolveurs
-    const g = { mode: 'guest', code, conn };
-
-    const send = (m) => { try { if (g.conn && g.conn.open) { g.conn.send(m); return true; } } catch (e) { /* ignore */ } return false; };
-    const request = (m, reply, ms = 5000) => new Promise((resolve, reject) => {
-      (waiters[reply] = waiters[reply] || []).push(resolve);
-      if (!send(m)) reject(new Error('Pas de connexion avec l’hôte.'));
-      setTimeout(() => reject(new Error('L’hôte ne répond pas.')), ms);
+    const c = { mode: 'guest' };
+    const g = Net.guest(peer, conn, code, token, {
+      onView: (v) => { if (ctrl === c) onView(v); },
+      onEnd: (stack, msg) => {
+        if (ctrl !== c) return;
+        ctrl = null;
+        cancelAnimationFrame(timerRaf);
+        Net.hidePanel();
+        if (stack > 0) Wallet.give(stack);
+        infoBox('Table fermée', `<p>${esc(msg)}</p><p>Vous récupérez <b>${money(stack)}</b>.</p>`, 'Retour au hall').then(backToHall);
+      },
+      onAbort: () => {
+        if (ctrl !== c) return;
+        ctrl = null;
+        cancelAnimationFrame(timerRaf);
+        Net.hidePanel();
+        backToHall();
+      },
     });
-
-    function onData(msg) {
-      if (!msg || typeof msg !== 'object') return;
-      if (msg.t === 'view') {
-        retries = 0;
-        setConn(true);
-        if (ctrl === g) onView(msg.v);
-      } else if (waiters[msg.t] && waiters[msg.t].length) {
-        waiters[msg.t].shift()(msg);
-      } else if (msg.t === 'closed') {
-        finish(Number(msg.stack) || 0, 'L’hôte a fermé la table.');
-      } else if (msg.t === 'gone') {
-        finish(0, 'Vous avez été retiré de la table après une longue déconnexion.');
-      } else if (msg.t === 'error') {
-        toast(cleanText(msg.msg, 200));
-      }
-    }
-    function onClose() {
-      if (ended || ctrl !== g) return;
-      setConn(false, 'Connexion à l’hôte perdue… reconnexion en cours.');
-      setTimeout(reconnect, 2000);
-    }
-    function attach(c) {
-      g.conn = c;
-      c.on('data', onData);
-      c.on('close', onClose);
-      c.on('error', () => { /* géré par « close » */ });
-    }
-    async function reconnect() {
-      if (ended || ctrl !== g) return;
-      retries++;
-      if (retries > 15) {
-        setConn(false, 'Impossible de joindre l’hôte : la table semble fermée.', true);
-        return;
-      }
-      try {
-        if (peer.disconnected && !peer.destroyed) peer.reconnect();
-        const c = await P2P.dial(peer, code);
-        attach(c);
-        c.send({ t: 'resume', token });
-      } catch (e) {
-        setTimeout(reconnect, 3000);
-      }
-    }
-    function finish(stack, msg) {
-      if (ended) return;
-      ended = true;
-      if (ctrl === g) ctrl = null;
-      window.removeEventListener('beforeunload', warnUnload);
-      cancelAnimationFrame(timerRaf);
-      setTimeout(() => { try { peer.destroy(); } catch (e) { /* ignore */ } }, 300);
-      if (stack > 0) Wallet.give(stack);
-      infoBox('Table fermée', `<p>${esc(msg)}</p><p>Vous récupérez <b>${money(stack)}</b>.</p>`, 'Retour au hall').then(backToHall);
-    }
-
-    g.act = (a) => send({ t: 'act', type: a.type, amount: a.amount });
-    g.chat = (text) => send({ t: 'chat', text });
-    g.rebuy = async (amount) => {
-      const r = await request({ t: 'rebuy', amount }, 'rebuy');
-      return !!r.ok;
-    };
-    g.leave = async () => {
-      let stack = 0;
-      try { stack = Number((await request({ t: 'leave' }, 'left', 4000)).stack) || 0; } catch (e) { /* hôte injoignable */ }
-      ended = true;
-      setTimeout(() => { try { peer.destroy(); } catch (e) { /* ignore */ } }, 300);
-      return stack;
-    };
-
-    peer.on('disconnected', () => {
-      setTimeout(() => { if (!ended && peer.disconnected && !peer.destroyed) peer.reconnect(); }, 2000);
-    });
-    peer.on('error', () => { /* les erreurs utiles sont gérées par dial() */ });
-    attach(conn);
-    ctrl = g;
+    c.act = (a) => g.send({ t: 'act', type: a.type, amount: a.amount });
+    c.chat = (t) => g.chat(t);
+    c.rebuy = async (amount) => !!(await g.request({ t: 'rebuy', amount }, 'rebuy')).ok;
+    c.leave = () => g.leave();
+    ctrl = c;
     resetTableState();
-    window.addEventListener('beforeunload', warnUnload);
     openTable();
   }
 
-  function setConn(ok, msg, final) {
-    const b = $('#pkConn');
-    b.hidden = ok;
-    if (ok) return;
-    b.innerHTML = esc(msg || 'Connexion perdue… reconnexion en cours.')
-      + (final ? ' <button type="button" class="btn-ctl" id="pkConnBack">Retour au hall</button>' : '');
-    if (final) {
-      $('#pkConnBack').onclick = () => {
-        ctrl = null;
-        window.removeEventListener('beforeunload', warnUnload);
-        b.hidden = true;
-        backToHall();
+  Net.register('poker', {
+    prepareCreate() { createStake.reset(); },
+    readCreate() {
+      if (!createStake.valid()) { toast('Il faut au moins 20 € pour ouvrir une table de poker.'); return null; }
+      const [sb, bb] = createStake.blinds;
+      return {
+        sb, bb, buyIn: createStake.buyIn,
+        bots: Number(segValue('netCreateBots') || 0),
+        difficulty: segValue('netCreateDiff') || 'normal',
+        blindUp: (Number(segValue('netCreateBlindUp')) || 0) * 60000,
       };
-    }
-  }
+    },
+    startHost,
+    startGuest,
+  });
 
   // ---------------------------------------------------------------
   // Table
   // ---------------------------------------------------------------
+  // Compte à rebours jusqu'au prochain niveau de blindes
+  let blindLevel = -1;
+  let blindAt = 0;
+  function tickBlinds() {
+    const el = $('#pkBlindsNext');
+    const v = view;
+    if (!v || !v.blindUp || typeof v.nextLevelMs !== 'number') { el.textContent = v && v.blindUp ? 'niveau maximum' : ''; el.className = 'kpi-sub'; return; }
+    const next = `${money(v.nextSb)} / ${money(v.nextBb)}`;
+    if (v.nextLevelMs === 0) { el.textContent = `↑ ${next} à la prochaine main`; el.className = 'kpi-sub soon'; return; }
+    const left = v.clockRunning ? Math.max(0, blindAt - performance.now()) : v.nextLevelMs;
+    const s = Math.ceil(left / 1000);
+    const mmss = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    el.textContent = `↑ ${next} dans ${mmss}${v.clockRunning ? '' : ' (en pause)'}`;
+    el.className = 'kpi-sub' + (left < 30000 ? ' soon' : '');
+  }
+  setInterval(() => { if (ctrl && view && $('#poker').classList.contains('active')) tickBlinds(); }, 500);
+
   function resetTableState() {
+    blindLevel = -1;
+    blindAt = 0;
     view = null;
     seenCards = new Set();
     seenHand = -1;
     decisionKey = '';
     lastLogLen = 0;
-    lastChatLen = -1;
     $('#pkLog').innerHTML = '';
-    $('#pkChatLog').innerHTML = '';
-    setConn(true);
   }
 
   function openTable() {
-    $('#pkNetPanel').hidden = !isNet();
+    if (isNet()) Net.mountPanel($('#pkNetSlot'), ctrl);
+    else Net.hidePanel();
     showScreen('poker');
     render();
   }
@@ -588,6 +307,13 @@ const PokerUI = (() => {
     $('#pkStack').textContent = me ? money(me.stack) : '—';
     $('#pkWallet').textContent = money(Wallet.balance);
     $('#pkBlindsKpi').textContent = `${money(v.sb)} / ${money(v.bb)}`;
+    if (typeof v.level === 'number' && v.level > blindLevel && blindLevel >= 0) {
+      toast(`Les blindes montent : ${money(v.sb)} / ${money(v.bb)}`, 'ok');
+      Sound.turn();
+    }
+    blindLevel = typeof v.level === 'number' ? v.level : -1;
+    blindAt = typeof v.nextLevelMs === 'number' ? performance.now() + v.nextLevelMs : 0;
+    tickBlinds();
     $('#pkHandNo').textContent = v.handNo ? `n° ${v.handNo}` : '—';
 
     // Gagnants de la main (pour la mise en valeur)
@@ -668,7 +394,7 @@ const PokerUI = (() => {
 
     renderActions(v, me);
     renderLog(v);
-    if (isNet()) renderNet(v);
+    if (isNet()) Net.updatePanel(v.room);
     startTimer(v);
   }
 
@@ -718,7 +444,7 @@ const PokerUI = (() => {
       else if (v.waiting) wait.textContent = isNet() ? 'En attente d’un autre joueur : donnez le code de la table à vos amis.' : 'En attente…';
       else wait.textContent = '';
       if (!rebuy.hidden) {
-        const bb = v.bb;
+        const bb = v.baseBb || v.bb;
         const r = $('#pkRebuyAmt');
         r.min = String(bb * 10);
         r.max = String(Math.max(bb * 10, Math.min(bb * 200, Math.floor(Wallet.balance))));
@@ -831,53 +557,6 @@ const PokerUI = (() => {
   }
 
   // ---------------------------------------------------------------
-  // Panneau peer-to-peer : code, invitation, chat, IA
-  // ---------------------------------------------------------------
-  let lastChatLen = -1;
-  function renderNet(v) {
-    const r = v.room || {};
-    const code = P2P.normalize(r.code);
-    $('#pkRoomCode').textContent = code;
-    const link = typeof r.invite === 'string' && /^https?:\/\//.test(r.invite) ? r.invite : null;
-    const inp = $('#pkInvite');
-    const val = link || code;
-    if (inp.value !== val) inp.value = val;
-    $('#pkInviteHelp').textContent = link
-      ? `Lien d’invitation (ou code ${code}) :`
-      : 'Code à donner à vos amis (dans leur casino : Poker entre amis → Rejoindre) :';
-    $('#pkHostTools').hidden = !r.isHost;
-    const chat = Array.isArray(r.chat) ? r.chat : [];
-    if (chat.length !== lastChatLen) {
-      lastChatLen = chat.length;
-      const box = $('#pkChatLog');
-      box.innerHTML = chat.length
-        ? chat.map((m) => `<div class="chat-line"><b>${esc(m.name)}</b> ${esc(m.text)}</div>`).join('')
-        : '<div class="muted small">Pas encore de message.</div>';
-      box.scrollTop = box.scrollHeight;
-    }
-  }
-  $('#pkCopy').addEventListener('click', async () => {
-    const input = $('#pkInvite');
-    try {
-      await navigator.clipboard.writeText(input.value);
-    } catch (e) {
-      input.select();
-      document.execCommand('copy');
-    }
-    toast(/^https?:/.test(input.value) ? 'Lien copié : envoyez-le à vos amis.' : `Code ${input.value} copié : envoyez-le à vos amis.`, 'ok');
-  });
-  $('#pkChatForm').addEventListener('submit', (e) => {
-    e.preventDefault();
-    const inp = $('#pkChatInput');
-    const text = inp.value.trim();
-    if (!text || !ctrl || !ctrl.chat) return;
-    ctrl.chat(text);
-    inp.value = '';
-  });
-  $('#pkBotAdd').addEventListener('click', () => ctrl && ctrl.bot && ctrl.bot('add'));
-  $('#pkBotRemove').addEventListener('click', () => ctrl && ctrl.bot && ctrl.bot('remove'));
-
-  // ---------------------------------------------------------------
   // Recave et départ
   // ---------------------------------------------------------------
   $('#pkRebuyAmt').addEventListener('input', (e) => {
@@ -912,10 +591,14 @@ const PokerUI = (() => {
       if (!(await confirmBox(ctrl.mode === 'host' ? 'Fermer la table ?' : 'Quitter la table ?', html, 'Quitter la table', 'Rester'))) return;
     }
     const c = ctrl;
+    if (!c) return;
+    const r = await c.leave();
+    if (r.error) { toast(r.error); return; }
+    if (ctrl !== c) return;
     ctrl = null;
     cancelAnimationFrame(timerRaf);
-    window.removeEventListener('beforeunload', warnUnload);
-    const stack = await c.leave();
+    Net.hidePanel();
+    const stack = Number(r.stack) || 0;
     if (stack > 0) Wallet.give(stack);
     toast(`Vous repartez avec ${money(stack)}.`, 'ok');
     backToHall();
@@ -923,5 +606,5 @@ const PokerUI = (() => {
   $('#pkLeaveBtn').addEventListener('click', () => leave(false));
   $('#pkRanksBtn').addEventListener('click', () => $('#pkRanksDlg').showModal());
 
-  return { openSolo, openCreate, openJoin };
+  return { openSolo };
 })();

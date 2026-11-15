@@ -17,7 +17,7 @@
   // ---------------------------------------------------------------
   // Cartes : entier 0–51, rang = c >> 2 (0 = deux … 12 = as), couleur = c & 3
   // ---------------------------------------------------------------
-  const RANK_LABEL = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'V', 'D', 'R', 'A'];
+  const RANK_LABEL = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
   const SUIT_SYM = ['♠', '♥', '♦', '♣'];
   const cardLabel = (c) => RANK_LABEL[c >> 2] + SUIT_SYM[c & 3];
   const fmt = (n) => Math.round(n).toLocaleString('fr-FR') + ' €';
@@ -745,14 +745,21 @@
   // ---------------------------------------------------------------
   // Runner : fait vivre une table (mains successives, IA, délais)
   // ---------------------------------------------------------------
+  // Niveaux de blindes, en multiples des blindes de départ (1/2 → 2/4 → 3/6 → 4/8 → 5/10…)
+  const BLIND_LADDER = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 25, 30, 40, 50, 60, 80, 100, 150, 200, 250, 300, 400, 500];
+
   class Runner {
     constructor(opts) {
       this.o = Object.assign({
         sb: 1, bb: 2, seats: 6, difficulty: 'normal',
         botThink: [900, 2000], streetDelay: 1100, showdownDelay: 5200, foldDelay: 2300, startDelay: 1300,
         humanTimeout: 0, requireHuman: true, replaceBots: true, botStack: null,
+        blindUp: 0, // durée d'un niveau de blindes en ms (0 : les blindes ne bougent pas)
         onUpdate: () => {},
       }, opts);
+      this.level = 0;     // niveau de blindes actuel
+      this.clock = 0;     // temps de jeu cumulé (ms)
+      this.clockFrom = 0; // début de la période de jeu en cours (0 : horloge arrêtée)
       this.table = new Table({ sb: this.o.sb, bb: this.o.bb, seats: this.o.seats });
       this.timer = null;
       this.deadline = 0;
@@ -844,6 +851,29 @@
     stop() {
       this.stopped = true;
       clearTimeout(this.timer);
+      this.runClock(false);
+    }
+
+    /** Temps de jeu écoulé : l'horloge des blindes s'arrête quand la table attend des joueurs. */
+    clockNow() { return this.clock + (this.clockFrom ? Date.now() - this.clockFrom : 0); }
+    runClock(on) {
+      if (on && !this.clockFrom) this.clockFrom = Date.now();
+      else if (!on && this.clockFrom) { this.clock += Date.now() - this.clockFrom; this.clockFrom = 0; }
+    }
+    /** Niveau de blindes que l'horloge a atteint. */
+    levelDue() {
+      if (!this.o.blindUp) return 0;
+      return Math.min(BLIND_LADDER.length - 1, Math.floor(this.clockNow() / this.o.blindUp));
+    }
+    /** Monte les blindes si le temps du niveau est écoulé (toujours entre deux mains). */
+    levelUp() {
+      const target = this.levelDue();
+      if (target <= this.level) return;
+      this.level = target;
+      const t = this.table;
+      t.sb = this.o.sb * BLIND_LADDER[target];
+      t.bb = this.o.bb * BLIND_LADDER[target];
+      t.log(`Les blindes passent à ${fmt(t.sb)} / ${fmt(t.bb)}`, 'blinds');
     }
 
     /** Annule la main en cours (fermeture de la table) : chacun récupère ce qu'il a misé. */
@@ -861,6 +891,7 @@
       this.deadline = 0;
       if (this.stopped) return;
       const t = this.table;
+      this.runClock(!(t.phase === 'waiting' && !this.canStart()));
       const later = (ms, fn) => {
         this.timer = setTimeout(() => {
           this.timer = null;
@@ -870,7 +901,7 @@
         }, ms);
       };
       if (t.phase === 'waiting') {
-        if (this.canStart()) later(this.o.startDelay, () => t.startHand());
+        if (this.canStart()) later(this.o.startDelay, () => { this.levelUp(); t.startHand(); });
         return;
       }
       if (t.phase === 'betting') {
@@ -943,6 +974,17 @@
       v.deadlineMs = this.deadline ? Math.max(0, this.deadline - Date.now()) : 0;
       v.waiting = this.table.phase === 'waiting' && !this.canStart();
       v.difficulty = this.o.difficulty;
+      v.baseBb = this.o.bb;
+      v.blindUp = this.o.blindUp;
+      v.level = this.level;
+      if (this.o.blindUp && this.level < BLIND_LADDER.length - 1) {
+        const next = this.level + 1;
+        v.nextSb = this.o.sb * BLIND_LADDER[next];
+        v.nextBb = this.o.bb * BLIND_LADDER[next];
+        // 0 : le niveau est atteint, les blindes montent à la prochaine main
+        v.nextLevelMs = this.levelDue() > this.level ? 0 : Math.max(0, next * this.o.blindUp - this.clockNow());
+        v.clockRunning = !!this.clockFrom;
+      }
       return v;
     }
   }
@@ -950,7 +992,7 @@
   return {
     RANK_LABEL, SUIT_SYM, cardLabel, fmt,
     evalScore, bestFive, handName, category, CAT_NAME, handPct,
-    Table, Runner,
+    Table, Runner, BLIND_LADDER,
     AI: { decide, equity, makeBot, STYLES, DIFF, rangeOf },
   };
 });

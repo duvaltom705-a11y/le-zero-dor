@@ -169,6 +169,17 @@ function infoBox(title, html, okLabel = 'OK') {
   });
 }
 
+// Sélecteurs à choix unique (« .seg[data-simple] ») des dialogues
+function segValue(id) {
+  const on = $(`#${id} .seg-btn.on`);
+  return on ? on.dataset.v : null;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.seg[data-simple] .seg-btn');
+  if (!b) return;
+  for (const x of b.parentElement.children) x.classList.toggle('on', x === b);
+});
+
 // ---------------------------------------------------------------
 // Portefeuille du joueur (la cave choisie à l'entrée)
 // ---------------------------------------------------------------
@@ -193,116 +204,8 @@ function showScreen(id) {
   window.scrollTo(0, 0);
 }
 
-// ---------------------------------------------------------------
-// Peer-to-peer (WebRTC via PeerJS)
-// Les navigateurs des joueurs se connectent directement entre eux.
-// Le serveur public gratuit de PeerJS sert seulement à les présenter
-// l'un à l'autre (échange d'adresses) ; les relais TURN de PeerJS
-// prennent le relais quand une connexion directe est impossible.
-// ---------------------------------------------------------------
-const P2P = {
-  LIB: 'https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js',
-  SRI: 'sha384-nlUQ8ZqCbvStErob+biJNzSgltf6urV3VGqhfIfzhmg9RXmpeRm76ELw0pYnKlTR',
-  PREFIX: 'zerodor-poker-',
-  ALPHABET: 'ABCDEFGHJKMNPQRSTUVWXYZ23456789',
-  loading: null,
-
-  /** Charge la bibliothèque PeerJS à la demande (il faut une connexion Internet). */
-  load() {
-    if (window.Peer) return Promise.resolve(window.Peer);
-    if (!this.loading) {
-      this.loading = new Promise((resolve, reject) => {
-        const s = document.createElement('script');
-        s.src = this.LIB;
-        s.integrity = this.SRI;
-        s.crossOrigin = 'anonymous';
-        s.onload = () => (window.Peer ? resolve(window.Peer) : reject(new Error('Module peer-to-peer invalide.')));
-        s.onerror = () => {
-          this.loading = null;
-          reject(new Error('Impossible de charger le module peer-to-peer : vérifiez votre connexion Internet.'));
-        };
-        document.head.append(s);
-      });
-    }
-    return this.loading;
-  },
-
-  makeCode() {
-    let c = '';
-    for (let i = 0; i < 5; i++) c += this.ALPHABET[RNG.int(this.ALPHABET.length)];
-    return c;
-  },
-  hostId(code) { return this.PREFIX + code; },
-  normalize(code) { return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8); },
-
-  /** Lien d'invitation, seulement si le casino est publié à une adresse que l'ami peut ouvrir. */
-  inviteLink(code) {
-    const local = location.protocol === 'file:' || /^(localhost|127\.|\[::1\]|0\.0\.0\.0)/.test(location.hostname);
-    return local ? null : `${location.origin}${location.pathname}#poker=${code}`;
-  },
-
-  friendly(e) {
-    const T = {
-      'browser-incompatible': 'Ce navigateur ne permet pas le jeu en peer-to-peer.',
-      network: 'Connexion au service peer-to-peer impossible : vérifiez votre connexion Internet.',
-      'server-error': 'Le service de mise en relation ne répond pas. Réessayez dans un instant.',
-      'socket-error': 'Le service de mise en relation ne répond pas. Réessayez dans un instant.',
-      'socket-closed': 'La connexion au service de mise en relation a été coupée.',
-      'ssl-unavailable': 'Connexion sécurisée indisponible.',
-    };
-    return new Error(T[e && e.type] || (e && e.message) || 'Erreur peer-to-peer.');
-  },
-
-  /** Ouvre un « pair » ; avec un identifiant pour l'hôte, sans pour un invité. */
-  async openPeer(id) {
-    const Peer = await this.load();
-    return new Promise((resolve, reject) => {
-      const p = id ? new Peer(id, { debug: 0 }) : new Peer({ debug: 0 });
-      const timer = setTimeout(() => { done(); p.destroy(); reject(new Error('Le service de mise en relation ne répond pas. Vérifiez votre connexion Internet.')); }, 15000);
-      const onOpen = () => { done(); resolve(p); };
-      const onErr = (e) => { done(); p.destroy(); reject(e); };
-      function done() { clearTimeout(timer); p.off('open', onOpen); p.off('error', onErr); }
-      p.on('open', onOpen);
-      p.on('error', onErr);
-    });
-  },
-
-  /** L'hôte réserve un code de table libre. */
-  async openHost() {
-    for (let attempt = 0; attempt < 6; attempt++) {
-      const code = this.makeCode();
-      try {
-        return { peer: await this.openPeer(this.hostId(code)), code };
-      } catch (e) {
-        if (e && e.type === 'unavailable-id') continue; // code déjà pris : on en tire un autre
-        throw this.friendly(e);
-      }
-    }
-    throw new Error('Impossible de réserver un code de table, réessayez.');
-  },
-
-  async openGuest() {
-    try { return await this.openPeer(null); } catch (e) { throw this.friendly(e); }
-  },
-
-  /** Connexion directe d'un invité à la table de code `code`. */
-  dial(peer, code) {
-    return new Promise((resolve, reject) => {
-      const conn = peer.connect(this.hostId(code), { reliable: true, serialization: 'json' });
-      const timer = setTimeout(() => { done(); conn.close(); reject(new Error('L’hôte ne répond pas. Vérifiez le code ou réessayez.')); }, 15000);
-      const onErr = (e) => {
-        if (e && e.type === 'peer-unavailable') { done(); reject(new Error(`Aucune table ouverte avec le code ${code}.`)); }
-      };
-      const onOpen = () => { done(); resolve(conn); };
-      function done() { clearTimeout(timer); peer.off('error', onErr); conn.off('open', onOpen); }
-      peer.on('error', onErr);
-      conn.on('open', onOpen);
-    });
-  },
-};
-
-// Lien d'invitation : …/#poker=ABCDE
-const inviteMatch = location.hash.match(/poker=([A-Za-z0-9]{4,8})/);
+// Lien d'invitation : …/#table=ABCDE (ou l'ancien …/#poker=ABCDE)
+const inviteMatch = location.hash.match(/(?:table|poker)=([A-Za-z0-9]{4,8})/);
 const pendingInvite = inviteMatch ? inviteMatch[1].toUpperCase() : null;
 
 // ---------------------------------------------------------------
@@ -355,15 +258,15 @@ const Entrance = (() => {
     Wallet.balance = amount;
     Wallet.active = true;
     Hall.open();
-    if (pendingInvite && typeof PokerUI !== 'undefined') {
-      setTimeout(() => PokerUI.openJoin(pendingInvite), 250);
+    if (pendingInvite && typeof Net !== 'undefined') {
+      setTimeout(() => Net.openJoin(pendingInvite), 250);
     }
   }
 
   if (pendingInvite) {
     const b = $('#inviteBanner');
     b.hidden = false;
-    b.innerHTML = `Vous êtes invité à une table de poker (salle <b>${esc(pendingInvite)}</b>). Choisissez votre cave pour entrer.`;
+    b.innerHTML = `Vous êtes invité à une table entre amis (code <b>${esc(pendingInvite)}</b>). Choisissez votre cave pour entrer au casino.`;
   }
 
   return { validate };
@@ -398,8 +301,8 @@ $('#hallGames').addEventListener('click', (e) => {
   if (g === 'roulette') Roulette.enter();
   else if (g === 'blackjack') Blackjack.enter();
   else if (g === 'poker') PokerUI.openSolo();
-  else if (g === 'p2p-create') PokerUI.openCreate();
-  else if (g === 'p2p-join') PokerUI.openJoin();
+  else if (g === 'p2p-create') Net.openCreate();
+  else if (g === 'p2p-join') Net.openJoin();
 });
 
 // Caisse : recharger le portefeuille

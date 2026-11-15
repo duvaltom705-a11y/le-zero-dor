@@ -82,8 +82,8 @@
         <div class="game-art art-roulette"><div class="mini-wheel"><span>0</span></div></div>
         <div class="game-body">
           <h2>Roulette</h2>
-          <p>Roulette européenne à un zéro, règles françaises avec la partage. Pleins, chevaux, carrés, douzaines…</p>
-          <div class="tags"><span>Jusqu'à 35 contre 1</span><span>Solo</span></div>
+          <p>Roulette européenne à un zéro, règles françaises avec la partage. Comme au casino, le croupier lance la bille tout seul à la fin de chaque compte à rebours.</p>
+          <div class="tags"><span>Jusqu'à 35 contre 1</span><span>Lancement automatique</span></div>
           <button class="btn-primary game-play" type="button" data-game="roulette">Jouer à la roulette</button>
         </div>
       </article>
@@ -91,7 +91,7 @@
       <article class="game-card">
         <div class="game-art art-bj">
           <div class="card blk tilt-l"><span class="ci tl">A<i>♠</i></span><span class="pip">♠</span><span class="ci br">A<i>♠</i></span></div>
-          <div class="card red tilt-r"><span class="ci tl">R<i>♥</i></span><span class="pip face">R<small>♥</small></span><span class="ci br">R<i>♥</i></span></div>
+          <div class="card red tilt-r"><span class="ci tl">K<i>♥</i></span><span class="pip face">K<small>♥</small></span><span class="ci br">K<i>♥</i></span></div>
         </div>
         <div class="game-body">
           <h2>Blackjack</h2>
@@ -110,7 +110,7 @@
         <div class="game-body">
           <h2>Poker Texas Hold'em</h2>
           <p>No limit contre 1 à 5 adversaires IA, chacun avec son style&nbsp;: prudent, requin, flambeur ou touriste. Ils calculent leurs chances sans voir vos cartes.</p>
-          <div class="tags"><span>Contre l'IA</span><span>3 niveaux</span></div>
+          <div class="tags"><span>Contre l'IA</span><span>3 niveaux</span><span>Blindes qui montent</span></div>
           <button class="btn-primary game-play" type="button" data-game="poker">S'asseoir à une table</button>
         </div>
       </article>
@@ -120,9 +120,9 @@
           <svg viewBox="0 0 120 70" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="18" width="40" height="28" rx="3"/><path d="M2 52h48"/><rect x="74" y="18" width="40" height="28" rx="3"/><path d="M70 52h48"/><path d="M50 30c6-6 14-6 20 0" opacity=".9"/><path d="M54 36c4-3 8-3 12 0" opacity=".9"/><circle cx="60" cy="41" r="1.5" fill="currentColor"/></g></svg>
         </div>
         <div class="game-body">
-          <h2>Poker entre amis</h2>
-          <p>En peer-to-peer&nbsp;: vos navigateurs se connectent directement, par Internet, où que soient vos amis. Créez une table, donnez-leur le code, ils le saisissent dans leur casino. Des IA peuvent compléter la table.</p>
-          <div class="tags"><span>Peer-to-peer</span><span>Jusqu'à 6 joueurs</span><span>Chat</span><span>Sans serveur</span></div>
+          <h2>Jouer entre amis</h2>
+          <p>Roulette, blackjack ou poker en peer-to-peer&nbsp;: vos navigateurs se connectent directement, où que soient vos amis. Créez une table et envoyez-leur le lien d'invitation.</p>
+          <div class="tags"><span>Peer-to-peer</span><span>Roulette · Blackjack · Poker</span><span>Chat</span><span>Sans serveur</span></div>
           <div class="btn-row">
             <button class="btn-primary game-play" type="button" data-game="p2p-create">Créer une table</button>
             <button class="btn-ctl game-play" type="button" data-game="p2p-join">Rejoindre</button>
@@ -138,7 +138,7 @@
   <header class="topbar">
     <div class="brand-small"><span class="dot">0</span>Roulette</div>
     <div class="kpis">
-      <div class="kpi"><span>Solde</span><strong id="balance" class="gold">0 €</strong></div>
+      <div class="kpi"><span id="balanceLabel">Solde</span><strong id="balance" class="gold">0 €</strong></div>
       <div class="kpi"><span>Mise en jeu</span><strong id="totalBet">0 €</strong></div>
       <div class="kpi"><span>Dernier coup</span><strong id="lastNet">—</strong></div>
     </div>
@@ -158,7 +158,9 @@
       <div class="announce" aria-live="polite">
         <div id="announce" class="announce-main">Faites vos jeux</div>
         <div id="announceSub" class="announce-sub">Posez vos jetons sur le tapis</div>
+        <div id="rlTimer" class="rl-timer idle" aria-hidden="true"><i></i></div>
       </div>
+      <div id="rlNetSlot"></div>
       <div class="panel">
         <div class="panel-head"><span>Derniers numéros</span><span id="roundCount">0 tour</span></div>
         <div id="historyList" class="history-list"></div>
@@ -181,7 +183,8 @@
         <button id="doubleBtn" class="btn-ctl" type="button">Doubler</button>
         <button id="spinBtn" class="btn-spin" type="button">Lancer la bille</button>
       </div>
-      <p class="hint">Clic&nbsp;: poser un jeton · Clic droit&nbsp;: retirer la mise · Visez les lignes et les coins des cases pour jouer à cheval, en transversale, en carré ou en sixain · <kbd>Espace</kbd>&nbsp;: lancer</p>
+      <label class="switch auto-rebet"><input type="checkbox" id="rlAuto"> Rejouer automatiquement mes mises à chaque tour</label>
+      <p class="hint">La bille part toute seule à la fin du compte à rebours · Clic&nbsp;: poser un jeton · Clic droit&nbsp;: retirer la mise · Visez les lignes et les coins des cases pour jouer à cheval, en transversale, en carré ou en sixain · <kbd>Espace</kbd>&nbsp;: lancer tout de suite</p>
     </section>
   </main>
 </section>
@@ -191,7 +194,7 @@
   <header class="topbar">
     <div class="brand-small"><span class="dot">0</span>Blackjack</div>
     <div class="kpis">
-      <div class="kpi"><span>Solde</span><strong id="bjBalance" class="gold">0 €</strong></div>
+      <div class="kpi"><span id="bjBalanceLabel">Solde</span><strong id="bjBalance" class="gold">0 €</strong></div>
       <div class="kpi"><span>Mise</span><strong id="bjBet">0 €</strong></div>
       <div class="kpi"><span>Dernier coup</span><strong id="bjLast">—</strong></div>
     </div>
@@ -218,12 +221,13 @@
         </div>
         <div class="bj-arc">Le blackjack paie 3 contre 2 · Le croupier reste sur tous les 17 · L'assurance paie 2 contre 1</div>
         <div class="bj-player-zone">
-          <div class="bj-hands" id="bjHands"></div>
-          <button type="button" class="bj-spot" id="bjSpot" aria-label="Cercle de mise"></button>
+          <div class="bj-seats n1" id="bjSeats"></div>
         </div>
       </div>
 
       <div class="bj-controls">
+        <p id="bjTimerLine" class="bj-timer-line" hidden></p>
+        <p id="bjWait" class="pk-wait" hidden></p>
         <div id="bjBetControls" class="bj-ctl-group">
           <div class="chips" id="bjChips" aria-label="Jetons"></div>
           <div class="controls">
@@ -231,7 +235,7 @@
             <button id="bjRebetBtn" class="btn-ctl" type="button">Remiser</button>
             <button id="bjDealBtn" class="btn-spin" type="button">Distribuer</button>
           </div>
-          <p class="hint">Cliquez sur un jeton ou sur le cercle pour miser · Clic droit sur le cercle&nbsp;: effacer · <kbd>Entrée</kbd>&nbsp;: distribuer</p>
+          <p class="hint" id="bjBetHint"></p>
         </div>
         <div id="bjInsControls" class="controls" hidden>
           <button id="bjInsYes" class="btn-ctl" type="button">Assurance</button>
@@ -248,6 +252,7 @@
     </section>
 
     <aside class="bj-side">
+      <div id="bjNetSlot"></div>
       <div class="panel advisor">
         <div class="panel-head"><span>Conseiller IA</span><label class="switch"><input type="checkbox" id="bjAdviceToggle" checked> Afficher</label></div>
         <div id="bjAdvice"></div>
@@ -271,7 +276,7 @@
     <div class="kpis">
       <div class="kpi"><span>Votre tapis</span><strong id="pkStack" class="gold">—</strong></div>
       <div class="kpi"><span>Portefeuille</span><strong id="pkWallet">—</strong></div>
-      <div class="kpi"><span>Blindes</span><strong id="pkBlindsKpi">—</strong></div>
+      <div class="kpi"><span>Blindes</span><strong id="pkBlindsKpi">—</strong><small id="pkBlindsNext" class="kpi-sub"></small></div>
       <div class="kpi"><span>Main</span><strong id="pkHandNo">—</strong></div>
     </div>
     <div class="top-actions">
@@ -280,7 +285,6 @@
       <button id="pkLeaveBtn" class="btn-ghost" type="button">Quitter la table</button>
     </div>
   </header>
-  <div id="pkConn" class="conn-banner" hidden></div>
 
   <main class="pk-layout">
     <section class="pk-main">
@@ -329,23 +333,7 @@
     </section>
 
     <aside class="pk-side">
-      <div id="pkNetPanel" class="panel" hidden>
-        <div class="panel-head"><span>Table <b id="pkRoomCode"></b></span><span>Peer-to-peer</span></div>
-        <div class="small muted" id="pkInviteHelp">Code à donner à vos amis&nbsp;:</div>
-        <div class="invite"><input id="pkInvite" readonly aria-label="Code ou lien d'invitation"><button id="pkCopy" class="btn-ctl" type="button">Copier</button></div>
-        <div id="pkHostTools" class="host-tools" hidden>
-          <span class="small muted">Adversaires IA</span>
-          <button id="pkBotAdd" class="btn-ctl" type="button">+ Ajouter</button>
-          <button id="pkBotRemove" class="btn-ctl" type="button">− Retirer</button>
-        </div>
-        <div class="chat">
-          <div id="pkChatLog" class="chat-log"></div>
-          <form id="pkChatForm" class="chat-form">
-            <input id="pkChatInput" maxlength="200" placeholder="Message…" autocomplete="off" aria-label="Message">
-            <button class="btn-ctl" type="submit">Envoyer</button>
-          </form>
-        </div>
-      </div>
+      <div id="pkNetSlot"></div>
       <div class="panel">
         <div class="panel-head"><span>Déroulement</span></div>
         <div id="pkLog" class="pk-log"></div>
@@ -354,7 +342,28 @@
   </main>
 </section>
 
+<div id="netConn" class="conn-banner" role="status" hidden></div>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- Panneau d'une table entre amis (déplacé dans l'écran du jeu en cours) -->
+<div id="netPanel" class="panel net-panel" hidden>
+  <div class="panel-head"><span>Table <b id="netRoomCode"></b></span><span id="netGameLabel">Peer-to-peer</span></div>
+  <div class="small muted" id="netInviteHelp">Code à donner à vos amis&nbsp;:</div>
+  <div class="invite"><input id="netInvite" readonly aria-label="Code ou lien d'invitation"><button id="netCopy" class="btn-ctl" type="button">Copier</button></div>
+  <div id="netPlayers" class="net-players" hidden></div>
+  <div id="netHostTools" class="host-tools" hidden>
+    <span class="small muted">Adversaires IA</span>
+    <button id="netBotAdd" class="btn-ctl" type="button">+ Ajouter</button>
+    <button id="netBotRemove" class="btn-ctl" type="button">− Retirer</button>
+  </div>
+  <div class="chat">
+    <div id="netChatLog" class="chat-log"></div>
+    <form id="netChatForm" class="chat-form">
+      <input id="netChatInput" maxlength="200" placeholder="Message…" autocomplete="off" aria-label="Message">
+      <button class="btn-ctl" type="submit">Envoyer</button>
+    </form>
+  </div>
+</div>
 
 <!-- ======================= DIALOGUES ======================= -->
 <dialog id="confirmDlg" class="dlg small">
@@ -390,6 +399,7 @@
     <li><strong>Générateur cryptographique.</strong> Chaque numéro vient de <code>crypto.getRandomValues</code>, le générateur sécurisé de votre système d'exploitation, alimenté par du bruit matériel — bien plus imprévisible que <code>Math.random</code>.</li>
     <li><strong>Aucun biais.</strong> 2³² n'étant pas divisible par 37, les valeurs « en trop » sont rejetées puis retirées&nbsp;: chaque case a exactement 1 chance sur 37.</li>
     <li><strong>Tirage indépendant.</strong> Le numéro est tiré une fois les jeux faits. Il ne dépend ni de vos mises, ni des tirages précédents&nbsp;: aucun numéro n'est « dû ».</li>
+    <li><strong>Lancement automatique, comme au casino.</strong> Le croupier annonce «&nbsp;Faites vos jeux&nbsp;», puis «&nbsp;Derniers jeux&nbsp;» 5 secondes avant la fin du compte à rebours, et «&nbsp;Rien ne va plus&nbsp;» quand il lance la bille. Cliquez sur «&nbsp;Lancer la bille&nbsp;» (ou «&nbsp;Je suis prêt&nbsp;» entre amis) pour ne pas attendre la fin du compte à rebours.</li>
     <li><strong>La bille suit le tirage.</strong> Vitesse du cylindre, lancer et rebonds sont aussi aléatoires, puis calculés pour que la bille tombe sur le numéro tiré.</li>
   </ul>
   <div class="rng-test">
@@ -422,6 +432,7 @@
     <li><strong>Doubler</strong> sur les deux premières cartes, y compris après une séparation. <strong>Séparer</strong> jusqu'à 4 mains&nbsp;; les as séparés ne reçoivent qu'une carte chacun.</li>
     <li><strong>Abandonner</strong> sur les deux premières cartes&nbsp;: vous récupérez la moitié de la mise.</li>
     <li><strong>Assurance</strong> proposée quand le croupier montre un as&nbsp;; elle paie 2 contre 1.</li>
+    <li><strong>Entre amis</strong>&nbsp;: jusqu'à 5 joueurs partagent le sabot. Chacun joue ses mains à son tour (30 s pour décider, sinon il reste)&nbsp;; la donne part quand tout le monde est prêt, ou 20 s après la première mise.</li>
   </ul>
   <h3>Le croupier IA</h3>
   <p class="small">Comme un vrai croupier, Victor applique les règles du casino sans rien choisir&nbsp;: il ne triche pas. Son intelligence sert à vous aider&nbsp;: à chaque décision, il calcule l'espérance de gain exacte de chaque option à partir des cartes encore inconnues (sabot et carte cachée), vous signale les erreurs coûteuses, et peut afficher le comptage Hi-Lo des cartes sorties.</p>
@@ -432,16 +443,16 @@
   <h2>Classement des mains</h2>
   <table class="payouts ranks">
     <tbody>
-      <tr><td>Quinte flush royale</td><td class="ex">A♠ R♠ D♠ V♠ 10♠</td></tr>
+      <tr><td>Quinte flush royale</td><td class="ex">A♠ K♠ Q♠ J♠ 10♠</td></tr>
       <tr><td>Quinte flush</td><td class="ex">9♥ 8♥ 7♥ 6♥ 5♥</td></tr>
-      <tr><td>Carré</td><td class="ex">7♣ 7♦ 7♥ 7♠ R♦</td></tr>
-      <tr><td>Full</td><td class="ex">D♠ D♥ D♦ 4♣ 4♠</td></tr>
-      <tr><td>Couleur</td><td class="ex">A♦ V♦ 9♦ 6♦ 2♦</td></tr>
+      <tr><td>Carré</td><td class="ex">7♣ 7♦ 7♥ 7♠ K♦</td></tr>
+      <tr><td>Full</td><td class="ex">Q♠ Q♥ Q♦ 4♣ 4♠</td></tr>
+      <tr><td>Couleur</td><td class="ex">A♦ J♦ 9♦ 6♦ 2♦</td></tr>
       <tr><td>Quinte</td><td class="ex">10♣ 9♦ 8♠ 7♥ 6♣</td></tr>
-      <tr><td>Brelan</td><td class="ex">8♠ 8♥ 8♦ R♣ 3♠</td></tr>
-      <tr><td>Double paire</td><td class="ex">V♣ V♦ 5♥ 5♠ A♣</td></tr>
-      <tr><td>Paire</td><td class="ex">10♥ 10♠ R♦ 7♣ 2♥</td></tr>
-      <tr><td>Carte haute</td><td class="ex">A♠ D♦ 9♣ 6♥ 3♠</td></tr>
+      <tr><td>Brelan</td><td class="ex">8♠ 8♥ 8♦ K♣ 3♠</td></tr>
+      <tr><td>Double paire</td><td class="ex">J♣ J♦ 5♥ 5♠ A♣</td></tr>
+      <tr><td>Paire</td><td class="ex">10♥ 10♠ K♦ 7♣ 2♥</td></tr>
+      <tr><td>Carte haute</td><td class="ex">A♠ Q♦ 9♣ 6♥ 3♠</td></tr>
     </tbody>
   </table>
   <p class="muted small">Chaque joueur forme la meilleure main de 5 cartes avec ses 2 cartes privées et les 5 cartes communes. Le jeu est mélangé par le générateur cryptographique&nbsp;; les IA ne voient jamais vos cartes&nbsp;: elles estiment leurs chances par simulation (Monte-Carlo) à partir de ce qu'elles voient et de vos actions.</p>
@@ -470,6 +481,15 @@
     <div class="field-out" id="pkSoloBuyInOut"></div>
   </div>
   <div class="field">
+    <span class="field-label">Montée des blindes</span>
+    <div class="seg" data-simple id="pkSoloBlindUp">
+      <button type="button" class="seg-btn" data-v="0">Jamais</button>
+      <button type="button" class="seg-btn on" data-v="3">Toutes les 3 min</button>
+      <button type="button" class="seg-btn" data-v="5">5 min</button>
+      <button type="button" class="seg-btn" data-v="10">10 min</button>
+    </div>
+  </div>
+  <div class="field">
     <span class="field-label">Niveau des IA</span>
     <div class="seg" data-simple id="pkSoloDiff">
       <button type="button" class="seg-btn" data-v="facile">Facile</button>
@@ -480,25 +500,59 @@
   <div class="dlg-actions"><button id="pkSoloGo" class="btn-primary" type="button">S'asseoir à la table</button></div>
 </dialog>
 
-<dialog id="pkCreateDlg" class="dlg">
+<dialog id="netCreateDlg" class="dlg">
   <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
   <h2>Créer une table entre amis</h2>
   <div class="field">
+    <span class="field-label">Jeu</span>
+    <div class="seg" id="netCreateGame">
+      <button type="button" class="seg-btn" data-v="roulette">Roulette</button>
+      <button type="button" class="seg-btn" data-v="blackjack">Blackjack</button>
+      <button type="button" class="seg-btn" data-v="poker">Poker</button>
+    </div>
+  </div>
+  <div class="field">
     <span class="field-label">Votre pseudo</span>
-    <span class="input-wrap"><input id="pkCreateName" maxlength="16" placeholder="ex. Tom" autocomplete="nickname"></span>
+    <span class="input-wrap"><input id="netCreateName" maxlength="16" placeholder="ex. Tom" autocomplete="nickname"></span>
   </div>
-  <div class="field">
+
+  <div class="field" data-for="roulette blackjack">
+    <span class="field-label">Jetons que vous apportez à la table</span>
+    <input type="range" id="netCreateCave" aria-label="Jetons apportés">
+    <div class="field-out" id="netCreateCaveOut"></div>
+  </div>
+  <div class="field" data-for="roulette">
+    <span class="field-label">Temps pour miser avant chaque lancer</span>
+    <div class="seg" data-simple id="netCreateBetTime">
+      <button type="button" class="seg-btn" data-v="15">15 s</button>
+      <button type="button" class="seg-btn on" data-v="20">20 s</button>
+      <button type="button" class="seg-btn" data-v="30">30 s</button>
+    </div>
+  </div>
+  <p class="muted small" data-for="roulette">Jusqu'à 8 joueurs. Chacun a ses jetons de couleur sur le même tapis&nbsp;; la bille part à la fin du compte à rebours, ou plus tôt si tout le monde est prêt.</p>
+  <p class="muted small" data-for="blackjack">Jusqu'à 5 joueurs face à Victor, le croupier IA. Chacun joue sa main à son tour&nbsp;; la donne part quand tout le monde est prêt, ou 20 s après la première mise.</p>
+
+  <div class="field" data-for="poker">
     <span class="field-label">Blindes (petite / grosse)</span>
-    <div class="seg" id="pkCreateBlinds"></div>
+    <div class="seg" id="netCreateBlinds"></div>
   </div>
-  <div class="field">
+  <div class="field" data-for="poker">
     <span class="field-label">Votre cave</span>
-    <input type="range" id="pkCreateBuyIn" aria-label="Cave">
-    <div class="field-out" id="pkCreateBuyInOut"></div>
+    <input type="range" id="netCreateBuyIn" aria-label="Cave">
+    <div class="field-out" id="netCreateBuyInOut"></div>
   </div>
-  <div class="field">
+  <div class="field" data-for="poker">
+    <span class="field-label">Montée des blindes</span>
+    <div class="seg" data-simple id="netCreateBlindUp">
+      <button type="button" class="seg-btn" data-v="0">Jamais</button>
+      <button type="button" class="seg-btn on" data-v="3">Toutes les 3 min</button>
+      <button type="button" class="seg-btn" data-v="5">5 min</button>
+      <button type="button" class="seg-btn" data-v="10">10 min</button>
+    </div>
+  </div>
+  <div class="field" data-for="poker">
     <span class="field-label">Adversaires IA en plus de vos amis</span>
-    <div class="seg" data-simple id="pkCreateBots">
+    <div class="seg" data-simple id="netCreateBots">
       <button type="button" class="seg-btn" data-v="0">Aucun</button>
       <button type="button" class="seg-btn" data-v="1">1</button>
       <button type="button" class="seg-btn on" data-v="2">2</button>
@@ -506,51 +560,54 @@
       <button type="button" class="seg-btn" data-v="4">4</button>
     </div>
   </div>
-  <div class="field">
+  <div class="field" data-for="poker">
     <span class="field-label">Niveau des IA</span>
-    <div class="seg" data-simple id="pkCreateDiff">
+    <div class="seg" data-simple id="netCreateDiff">
       <button type="button" class="seg-btn" data-v="facile">Facile</button>
       <button type="button" class="seg-btn on" data-v="normal">Normal</button>
       <button type="button" class="seg-btn" data-v="difficile">Difficile</button>
     </div>
   </div>
-  <p class="muted small">Une fois la table créée, donnez le code affiché à vos amis. La partie tourne dans votre navigateur&nbsp;: gardez cette page ouverte tant que vous jouez. Chaque joueur choisit sa propre cave.</p>
-  <div class="dlg-actions"><button id="pkCreateGo" class="btn-primary" type="button">Créer la table</button></div>
+  <p class="muted small">Une fois la table créée, envoyez le lien d'invitation à vos amis. La partie tourne dans votre navigateur&nbsp;: gardez cette page ouverte tant que vous jouez. Chaque joueur choisit combien il apporte.</p>
+  <div class="dlg-actions"><button id="netCreateGo" class="btn-primary" type="button">Créer la table</button></div>
 </dialog>
 
-<dialog id="pkJoinDlg" class="dlg">
+<dialog id="netJoinDlg" class="dlg">
   <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
   <h2>Rejoindre une table</h2>
-  <div id="pkJoinStep1">
+  <div id="netJoinStep1">
     <div class="field">
       <span class="field-label">Votre pseudo</span>
-      <span class="input-wrap"><input id="pkJoinName" maxlength="16" placeholder="ex. Léa" autocomplete="nickname"></span>
+      <span class="input-wrap"><input id="netJoinName" maxlength="16" placeholder="ex. Léa" autocomplete="nickname"></span>
     </div>
     <div class="field">
       <span class="field-label">Code de la table</span>
-      <span class="input-wrap"><input id="pkJoinCode" maxlength="8" placeholder="ex. K7PM2" autocomplete="off" class="code-input"></span>
+      <span class="input-wrap"><input id="netJoinCode" maxlength="8" placeholder="ex. K7PM2" autocomplete="off" class="code-input"></span>
     </div>
-    <p class="muted small">Demandez le code à l'ami qui a créé la table. La connexion se fait directement entre vos deux navigateurs.</p>
-    <div class="dlg-actions"><button id="pkJoinConnect" class="btn-primary" type="button">Se connecter</button></div>
+    <p class="muted small">Demandez le code (ou le lien) à l'ami qui a créé la table. La connexion se fait directement entre vos deux navigateurs.</p>
+    <div class="dlg-actions"><button id="netJoinConnect" class="btn-primary" type="button">Se connecter</button></div>
   </div>
-  <div id="pkJoinStep2" hidden>
-    <p id="pkJoinInfo" class="join-info"></p>
+  <div id="netJoinStep2" hidden>
+    <p id="netJoinInfo" class="join-info"></p>
     <div class="field">
-      <span class="field-label">Votre cave</span>
-      <input type="range" id="pkJoinBuyIn" aria-label="Cave">
-      <div class="field-out" id="pkJoinBuyInOut"></div>
+      <span class="field-label">Jetons que vous apportez à la table</span>
+      <input type="range" id="netJoinBuyIn" aria-label="Jetons apportés">
+      <div class="field-out" id="netJoinBuyInOut"></div>
     </div>
     <div class="dlg-actions">
-      <button id="pkJoinBack" class="btn-ctl" type="button">Retour</button>
-      <button id="pkJoinGo" class="btn-primary" type="button">S'asseoir à la table</button>
+      <button id="netJoinBack" class="btn-ctl" type="button">Retour</button>
+      <button id="netJoinGo" class="btn-primary" type="button">S'asseoir à la table</button>
     </div>
   </div>
 </dialog>
 
 <script src="js/rng.js"></script>
 <script src="js/casino.js"></script>
+<script src="js/net.js"></script>
 <script src="js/cards.js"></script>
+<script src="js/roulette-core.js"></script>
 <script src="js/roulette.js"></script>
+<script src="js/blackjack-core.js"></script>
 <script src="js/blackjack.js"></script>
 <script src="js/poker-core.js"></script>
 <script src="js/poker-ui.js"></script>
