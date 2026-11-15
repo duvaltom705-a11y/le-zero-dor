@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Le Zéro d'Or · Casino</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/games.css">
+</head>
+<body>
+
+<!-- ======================= ENTRÉE DU CASINO ======================= -->
+<section id="lobby" class="screen active" aria-label="Entrée du casino">
+  <div class="lobby-card">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true"><span>0</span></div>
+      <h1>Le Zéro d'Or</h1>
+      <p class="tagline">Roulette · Blackjack · Poker</p>
+    </div>
+
+    <div class="lobby-body">
+      <p id="inviteBanner" class="invite-banner" hidden></p>
+      <h2>Avec combien voulez-vous entrer&nbsp;?</h2>
+      <p class="muted">Choisissez votre cave&nbsp;: c'est la somme que vous échangez contre des jetons à l'entrée. Elle vous suit d'une table à l'autre.</p>
+
+      <div class="amounts" id="amounts" role="radiogroup" aria-label="Montant d'entrée">
+        <button type="button" class="amount" data-amount="20">20 €</button>
+        <button type="button" class="amount" data-amount="50">50 €</button>
+        <button type="button" class="amount" data-amount="100">100 €</button>
+        <button type="button" class="amount" data-amount="250">250 €</button>
+        <button type="button" class="amount" data-amount="500">500 €</button>
+        <button type="button" class="amount" data-amount="1000">1 000 €</button>
+        <button type="button" class="amount" data-amount="2500">2 500 €</button>
+        <button type="button" class="amount" data-amount="5000">5 000 €</button>
+      </div>
+
+      <label class="custom" for="customAmount">
+        <span class="custom-label">Ou un montant libre (10 € à 100 000 €)</span>
+        <span class="input-wrap">
+          <input id="customAmount" type="number" inputmode="numeric" min="10" max="100000" step="1" placeholder="ex. 350">
+          <span class="suffix">€</span>
+        </span>
+      </label>
+      <p class="error" id="lobbyError" role="alert"></p>
+
+      <button id="enterBtn" class="btn-primary" type="button" disabled>Entrer au casino</button>
+      <p class="last-session" id="lastSession" hidden></p>
+    </div>
+
+    <p class="disclaimer">Jetons virtuels uniquement — aucun argent réel n'est misé ni gagné.</p>
+  </div>
+</section>
+
+<!-- ======================= HALL DES JEUX ======================= -->
+<section id="hall" class="screen game" aria-label="Hall des jeux">
+  <header class="topbar">
+    <div class="brand-small"><span class="dot">0</span>Le Zéro d'Or</div>
+    <div class="kpis">
+      <div class="kpi"><span>Portefeuille</span><strong id="hallBalance" class="gold">0 €</strong></div>
+      <div class="kpi"><span>Déposé</span><strong id="hallIn">0 €</strong></div>
+      <div class="kpi"><span>Résultat</span><strong id="hallNet">±0 €</strong></div>
+    </div>
+    <div class="top-actions">
+      <button class="btn-ghost icon sound-btn" type="button"></button>
+      <button id="cashierBtn" class="btn-ghost" type="button">Caisse</button>
+      <button id="exitBtn" class="btn-ghost" type="button">Quitter le casino</button>
+    </div>
+  </header>
+
+  <main class="hall">
+    <div class="hall-hero">
+      <h1 class="hall-title">Choisissez votre table</h1>
+      <p class="muted">Votre portefeuille vous suit d'un jeu à l'autre. Toutes les cartes et tous les numéros sont tirés par le générateur cryptographique de votre système.</p>
+      <p id="hallBroke" class="hall-broke" hidden>Votre portefeuille est vide. <button id="hallBrokeBtn" class="btn-ctl" type="button">Recharger à la caisse</button></p>
+    </div>
+
+    <div class="games" id="hallGames">
+      <article class="game-card">
+        <div class="game-art art-roulette"><div class="mini-wheel"><span>0</span></div></div>
+        <div class="game-body">
+          <h2>Roulette</h2>
+          <p>Roulette européenne à un zéro, règles françaises avec la partage. Pleins, chevaux, carrés, douzaines…</p>
+          <div class="tags"><span>Jusqu'à 35 contre 1</span><span>Solo</span></div>
+          <button class="btn-primary game-play" type="button" data-game="roulette">Jouer à la roulette</button>
+        </div>
+      </article>
+
+      <article class="game-card">
+        <div class="game-art art-bj">
+          <div class="card blk tilt-l"><span class="ci tl">A<i>♠</i></span><span class="pip">♠</span><span class="ci br">A<i>♠</i></span></div>
+          <div class="card red tilt-r"><span class="ci tl">R<i>♥</i></span><span class="pip face">R<small>♥</small></span><span class="ci br">R<i>♥</i></span></div>
+        </div>
+        <div class="game-body">
+          <h2>Blackjack</h2>
+          <p>Sabot de 6 jeux face à Victor, croupier IA&nbsp;: il calcule en direct la meilleure décision à partir des cartes restantes et commente vos choix.</p>
+          <div class="tags"><span>Paie 3 contre 2</span><span>Conseils IA</span><span>Comptage</span></div>
+          <button class="btn-primary game-play" type="button" data-game="blackjack">Jouer au blackjack</button>
+        </div>
+      </article>
+
+      <article class="game-card">
+        <div class="game-art art-poker">
+          <div class="card red tilt-l"><span class="ci tl">A<i>♦</i></span><span class="pip">♦</span><span class="ci br">A<i>♦</i></span></div>
+          <div class="card blk"><span class="ci tl">A<i>♣</i></span><span class="pip">♣</span><span class="ci br">A<i>♣</i></span></div>
+          <div class="card red tilt-r"><span class="ci tl">A<i>♥</i></span><span class="pip">♥</span><span class="ci br">A<i>♥</i></span></div>
+        </div>
+        <div class="game-body">
+          <h2>Poker Texas Hold'em</h2>
+          <p>No limit contre 1 à 5 adversaires IA, chacun avec son style&nbsp;: prudent, requin, flambeur ou touriste. Ils calculent leurs chances sans voir vos cartes.</p>
+          <div class="tags"><span>Contre l'IA</span><span>3 niveaux</span></div>
+          <button class="btn-primary game-play" type="button" data-game="poker">S'asseoir à une table</button>
+        </div>
+      </article>
+
+      <article class="game-card lan">
+        <div class="game-art art-lan">
+          <svg viewBox="0 0 120 70" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="18" width="40" height="28" rx="3"/><path d="M2 52h48"/><rect x="74" y="18" width="40" height="28" rx="3"/><path d="M70 52h48"/><path d="M50 30c6-6 14-6 20 0" opacity=".9"/><path d="M54 36c4-3 8-3 12 0" opacity=".9"/><circle cx="60" cy="41" r="1.5" fill="currentColor"/></g></svg>
+        </div>
+        <div class="game-body">
+          <h2>Poker entre amis</h2>
+          <p>En peer-to-peer&nbsp;: vos navigateurs se connectent directement, par Internet, où que soient vos amis. Créez une table, donnez-leur le code, ils le saisissent dans leur casino. Des IA peuvent compléter la table.</p>
+          <div class="tags"><span>Peer-to-peer</span><span>Jusqu'à 6 joueurs</span><span>Chat</span><span>Sans serveur</span></div>
+          <div class="btn-row">
+            <button class="btn-primary game-play" type="button" data-game="p2p-create">Créer une table</button>
+            <button class="btn-ctl game-play" type="button" data-game="p2p-join">Rejoindre</button>
+          </div>
+        </div>
+      </article>
+    </div>
+  </main>
+</section>
+
+<!-- ======================= ROULETTE ======================= -->
+<section id="roulette" class="screen game" aria-label="Table de roulette">
+  <header class="topbar">
+    <div class="brand-small"><span class="dot">0</span>Roulette</div>
+    <div class="kpis">
+      <div class="kpi"><span>Solde</span><strong id="balance" class="gold">0 €</strong></div>
+      <div class="kpi"><span>Mise en jeu</span><strong id="totalBet">0 €</strong></div>
+      <div class="kpi"><span>Dernier coup</span><strong id="lastNet">—</strong></div>
+    </div>
+    <div class="top-actions">
+      <button class="btn-ghost icon sound-btn" type="button"></button>
+      <button id="infoBtn" class="btn-ghost" type="button">Règles &amp; hasard</button>
+      <button id="leaveBtn" class="btn-ghost" type="button">← Hall</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="wheel-col">
+      <div class="wheel-wrap" id="wheelWrap">
+        <canvas id="wheel" aria-label="Cylindre de roulette"></canvas>
+        <div id="resultBadge" class="result-badge" hidden></div>
+      </div>
+      <div class="announce" aria-live="polite">
+        <div id="announce" class="announce-main">Faites vos jeux</div>
+        <div id="announceSub" class="announce-sub">Posez vos jetons sur le tapis</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Derniers numéros</span><span id="roundCount">0 tour</span></div>
+        <div id="historyList" class="history-list"></div>
+        <div id="statsBox" class="stats"></div>
+      </div>
+    </section>
+
+    <section class="board-col">
+      <div class="board-scroll">
+        <div class="board" id="board"></div>
+      </div>
+      <div id="betInfo" class="bet-info"></div>
+      <div class="chip-tray">
+        <div class="chips" id="chips" role="radiogroup" aria-label="Valeur du jeton"></div>
+      </div>
+      <div class="controls">
+        <button id="undoBtn" class="btn-ctl" type="button">Annuler</button>
+        <button id="clearBtn" class="btn-ctl" type="button">Effacer</button>
+        <button id="rebetBtn" class="btn-ctl" type="button">Remiser</button>
+        <button id="doubleBtn" class="btn-ctl" type="button">Doubler</button>
+        <button id="spinBtn" class="btn-spin" type="button">Lancer la bille</button>
+      </div>
+      <p class="hint">Clic&nbsp;: poser un jeton · Clic droit&nbsp;: retirer la mise · Visez les lignes et les coins des cases pour jouer à cheval, en transversale, en carré ou en sixain · <kbd>Espace</kbd>&nbsp;: lancer</p>
+    </section>
+  </main>
+</section>
+
+<!-- ======================= BLACKJACK ======================= -->
+<section id="blackjack" class="screen game" aria-label="Table de blackjack">
+  <header class="topbar">
+    <div class="brand-small"><span class="dot">0</span>Blackjack</div>
+    <div class="kpis">
+      <div class="kpi"><span>Solde</span><strong id="bjBalance" class="gold">0 €</strong></div>
+      <div class="kpi"><span>Mise</span><strong id="bjBet">0 €</strong></div>
+      <div class="kpi"><span>Dernier coup</span><strong id="bjLast">—</strong></div>
+    </div>
+    <div class="top-actions">
+      <button class="btn-ghost icon sound-btn" type="button"></button>
+      <button id="bjRulesBtn" class="btn-ghost" type="button">Règles</button>
+      <button id="bjLeaveBtn" class="btn-ghost" type="button">← Hall</button>
+    </div>
+  </header>
+
+  <main class="bj-layout">
+    <section class="bj-main">
+      <div class="bj-table">
+        <div class="bj-dealer-zone">
+          <div class="dealer-ai">
+            <div class="dealer-avatar" aria-hidden="true">V</div>
+            <div class="dealer-bubble"><div class="dealer-name">Victor <span>· croupier IA</span></div><p id="bjSay" aria-live="polite"></p></div>
+          </div>
+          <div class="bj-shoe" id="bjShoe"></div>
+          <div class="bj-dealer-hand">
+            <div class="bj-cards" id="bjDealerCards"></div>
+            <div class="bj-total" id="bjDealerTotal" hidden></div>
+          </div>
+        </div>
+        <div class="bj-arc">Le blackjack paie 3 contre 2 · Le croupier reste sur tous les 17 · L'assurance paie 2 contre 1</div>
+        <div class="bj-player-zone">
+          <div class="bj-hands" id="bjHands"></div>
+          <button type="button" class="bj-spot" id="bjSpot" aria-label="Cercle de mise"></button>
+        </div>
+      </div>
+
+      <div class="bj-controls">
+        <div id="bjBetControls" class="bj-ctl-group">
+          <div class="chips" id="bjChips" aria-label="Jetons"></div>
+          <div class="controls">
+            <button id="bjClearBtn" class="btn-ctl" type="button">Effacer</button>
+            <button id="bjRebetBtn" class="btn-ctl" type="button">Remiser</button>
+            <button id="bjDealBtn" class="btn-spin" type="button">Distribuer</button>
+          </div>
+          <p class="hint">Cliquez sur un jeton ou sur le cercle pour miser · Clic droit sur le cercle&nbsp;: effacer · <kbd>Entrée</kbd>&nbsp;: distribuer</p>
+        </div>
+        <div id="bjInsControls" class="controls" hidden>
+          <button id="bjInsYes" class="btn-ctl" type="button">Assurance</button>
+          <button id="bjInsNo" class="btn-spin" type="button">Non merci</button>
+        </div>
+        <div id="bjPlayControls" class="controls" hidden>
+          <button class="btn-spin" type="button" data-bj="hit">Tirer <kbd>T</kbd></button>
+          <button class="btn-spin" type="button" data-bj="stand">Rester <kbd>R</kbd></button>
+          <button class="btn-ctl" type="button" data-bj="double">Doubler <kbd>D</kbd></button>
+          <button class="btn-ctl" type="button" data-bj="split">Séparer <kbd>P</kbd></button>
+          <button class="btn-ctl" type="button" data-bj="surrender">Abandonner <kbd>A</kbd></button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="bj-side">
+      <div class="panel advisor">
+        <div class="panel-head"><span>Conseiller IA</span><label class="switch"><input type="checkbox" id="bjAdviceToggle" checked> Afficher</label></div>
+        <div id="bjAdvice"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Comptage des cartes</span><label class="switch"><input type="checkbox" id="bjCountToggle"> Afficher</label></div>
+        <div id="bjCount"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Votre session</span></div>
+        <div id="bjStats"></div>
+      </div>
+    </aside>
+  </main>
+</section>
+
+<!-- ======================= POKER ======================= -->
+<section id="poker" class="screen game" aria-label="Table de poker">
+  <header class="topbar">
+    <div class="brand-small"><span class="dot">0</span>Poker</div>
+    <div class="kpis">
+      <div class="kpi"><span>Votre tapis</span><strong id="pkStack" class="gold">—</strong></div>
+      <div class="kpi"><span>Portefeuille</span><strong id="pkWallet">—</strong></div>
+      <div class="kpi"><span>Blindes</span><strong id="pkBlindsKpi">—</strong></div>
+      <div class="kpi"><span>Main</span><strong id="pkHandNo">—</strong></div>
+    </div>
+    <div class="top-actions">
+      <button class="btn-ghost icon sound-btn" type="button"></button>
+      <button id="pkRanksBtn" class="btn-ghost" type="button">Mains</button>
+      <button id="pkLeaveBtn" class="btn-ghost" type="button">Quitter la table</button>
+    </div>
+  </header>
+  <div id="pkConn" class="conn-banner" hidden></div>
+
+  <main class="pk-layout">
+    <section class="pk-main">
+      <div class="pk-table-wrap">
+        <div class="pk-table">
+          <div class="pk-felt">
+            <div class="pk-center">
+              <div id="pkPot" class="pk-pot"></div>
+              <div id="pkBoard" class="pk-board"></div>
+              <div id="pkMsg" class="pk-msg"></div>
+            </div>
+          </div>
+          <div id="pkSeats"></div>
+        </div>
+      </div>
+
+      <div class="pk-actions">
+        <div id="pkMyHand" class="pk-myhand"></div>
+        <div id="pkActBtns" class="pk-act" hidden>
+          <button type="button" class="btn-ctl fold" data-pk="fold">Se coucher <kbd>F</kbd></button>
+          <button type="button" class="btn-ctl call" data-pk="call">Parole <kbd>C</kbd></button>
+          <div id="pkRaiseBox" class="pk-raise">
+            <div id="pkPresets" class="pk-presets">
+              <button type="button" data-size="min">Min</button>
+              <button type="button" data-size="0.5">½ pot</button>
+              <button type="button" data-size="0.75">¾ pot</button>
+              <button type="button" data-size="1">Pot</button>
+              <button type="button" data-size="all">Tapis</button>
+            </div>
+            <div class="pk-slider">
+              <input type="range" id="pkRange" aria-label="Montant de la relance">
+              <input type="number" id="pkAmount" inputmode="numeric" aria-label="Montant de la relance">
+            </div>
+            <button type="button" class="btn-spin" data-pk="raise">Relancer <kbd>R</kbd></button>
+          </div>
+        </div>
+        <div id="pkWait" class="pk-wait"></div>
+        <div id="pkRebuy" class="pk-rebuy" hidden>
+          <span>Vous n'avez plus de jetons. Recave&nbsp;:</span>
+          <input type="range" id="pkRebuyAmt" aria-label="Montant de la recave">
+          <b id="pkRebuyOut"></b>
+          <button type="button" id="pkRebuyGo" class="btn-spin">Se recaver</button>
+          <button type="button" id="pkRebuyLeave" class="btn-ctl">Quitter la table</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="pk-side">
+      <div id="pkNetPanel" class="panel" hidden>
+        <div class="panel-head"><span>Table <b id="pkRoomCode"></b></span><span>Peer-to-peer</span></div>
+        <div class="small muted" id="pkInviteHelp">Code à donner à vos amis&nbsp;:</div>
+        <div class="invite"><input id="pkInvite" readonly aria-label="Code ou lien d'invitation"><button id="pkCopy" class="btn-ctl" type="button">Copier</button></div>
+        <div id="pkHostTools" class="host-tools" hidden>
+          <span class="small muted">Adversaires IA</span>
+          <button id="pkBotAdd" class="btn-ctl" type="button">+ Ajouter</button>
+          <button id="pkBotRemove" class="btn-ctl" type="button">− Retirer</button>
+        </div>
+        <div class="chat">
+          <div id="pkChatLog" class="chat-log"></div>
+          <form id="pkChatForm" class="chat-form">
+            <input id="pkChatInput" maxlength="200" placeholder="Message…" autocomplete="off" aria-label="Message">
+            <button class="btn-ctl" type="submit">Envoyer</button>
+          </form>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span>Déroulement</span></div>
+        <div id="pkLog" class="pk-log"></div>
+      </div>
+    </aside>
+  </main>
+</section>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- ======================= DIALOGUES ======================= -->
+<dialog id="confirmDlg" class="dlg small">
+  <h2 id="confirmTitle"></h2>
+  <div id="confirmBody"></div>
+  <div class="dlg-actions">
+    <button id="confirmCancel" class="btn-ctl" type="button">Annuler</button>
+    <button id="confirmOk" class="btn-primary" type="button">Confirmer</button>
+  </div>
+</dialog>
+
+<dialog id="cashierDlg" class="dlg small">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Caisse</h2>
+  <p class="muted">Ajoutez des jetons virtuels à votre portefeuille.</p>
+  <div class="amounts" id="cashierAmounts">
+    <button type="button" class="amount" data-add="20">+20 €</button>
+    <button type="button" class="amount" data-add="50">+50 €</button>
+    <button type="button" class="amount" data-add="100">+100 €</button>
+    <button type="button" class="amount" data-add="500">+500 €</button>
+  </div>
+  <div class="cashier-custom">
+    <span class="input-wrap"><input id="cashierAmount" type="number" inputmode="numeric" min="10" max="100000" placeholder="Autre montant"><span class="suffix">€</span></span>
+    <button id="cashierOk" class="btn-primary" type="button">Ajouter</button>
+  </div>
+</dialog>
+
+<dialog id="infoDlg" class="dlg">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Roulette : règles &amp; hasard</h2>
+  <h3>Comment le hasard est produit</h3>
+  <ul class="facts">
+    <li><strong>Générateur cryptographique.</strong> Chaque numéro vient de <code>crypto.getRandomValues</code>, le générateur sécurisé de votre système d'exploitation, alimenté par du bruit matériel — bien plus imprévisible que <code>Math.random</code>.</li>
+    <li><strong>Aucun biais.</strong> 2³² n'étant pas divisible par 37, les valeurs « en trop » sont rejetées puis retirées&nbsp;: chaque case a exactement 1 chance sur 37.</li>
+    <li><strong>Tirage indépendant.</strong> Le numéro est tiré une fois les jeux faits. Il ne dépend ni de vos mises, ni des tirages précédents&nbsp;: aucun numéro n'est « dû ».</li>
+    <li><strong>La bille suit le tirage.</strong> Vitesse du cylindre, lancer et rebonds sont aussi aléatoires, puis calculés pour que la bille tombe sur le numéro tiré.</li>
+  </ul>
+  <div class="rng-test">
+    <button id="rngTestBtn" class="btn-ctl" type="button">Tester le générateur sur 1 000 000 de tirages</button>
+    <div id="rngResult" class="rng-result"></div>
+  </div>
+  <h3>Paiements</h3>
+  <table class="payouts">
+    <thead><tr><th>Mise</th><th>Numéros</th><th>Paie</th></tr></thead>
+    <tbody>
+      <tr><td>Plein</td><td>1</td><td>35 contre 1</td></tr>
+      <tr><td>Cheval</td><td>2</td><td>17 contre 1</td></tr>
+      <tr><td>Transversale (dont 0/1/2 et 0/2/3)</td><td>3</td><td>11 contre 1</td></tr>
+      <tr><td>Carré (dont 0/1/2/3)</td><td>4</td><td>8 contre 1</td></tr>
+      <tr><td>Sixain</td><td>6</td><td>5 contre 1</td></tr>
+      <tr><td>Douzaine · Colonne</td><td>12</td><td>2 contre 1</td></tr>
+      <tr><td>Chances simples&nbsp;: Rouge/Noir · Pair/Impair · Manque/Passe</td><td>18</td><td>1 contre 1</td></tr>
+    </tbody>
+  </table>
+  <p class="muted small"><strong>La partage&nbsp;:</strong> si le zéro sort, les mises sur les chances simples sont remboursées de moitié. Avantage de la maison&nbsp;: 2,70&nbsp;% (1,35&nbsp;% sur les chances simples).</p>
+</dialog>
+
+<dialog id="bjRulesDlg" class="dlg">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Blackjack : règles de la table</h2>
+  <ul class="facts">
+    <li><strong>Sabot de 6 jeux</strong> mélangé par le générateur cryptographique (mélange de Fisher-Yates). Une carte de coupe est placée entre 72 et 82&nbsp;% du sabot&nbsp;; quand elle sort, le sabot est remélangé avant la donne suivante.</li>
+    <li>Le blackjack paie <strong>3 contre 2</strong>, les autres mains gagnantes <strong>1 contre 1</strong>.</li>
+    <li>Le croupier <strong>reste sur tous les 17</strong>, y compris le 17 « souple » (as + 6). Avec un as ou un 10 visible, il vérifie sa carte cachée&nbsp;: s'il a blackjack, la main s'arrête aussitôt.</li>
+    <li><strong>Doubler</strong> sur les deux premières cartes, y compris après une séparation. <strong>Séparer</strong> jusqu'à 4 mains&nbsp;; les as séparés ne reçoivent qu'une carte chacun.</li>
+    <li><strong>Abandonner</strong> sur les deux premières cartes&nbsp;: vous récupérez la moitié de la mise.</li>
+    <li><strong>Assurance</strong> proposée quand le croupier montre un as&nbsp;; elle paie 2 contre 1.</li>
+  </ul>
+  <h3>Le croupier IA</h3>
+  <p class="small">Comme un vrai croupier, Victor applique les règles du casino sans rien choisir&nbsp;: il ne triche pas. Son intelligence sert à vous aider&nbsp;: à chaque décision, il calcule l'espérance de gain exacte de chaque option à partir des cartes encore inconnues (sabot et carte cachée), vous signale les erreurs coûteuses, et peut afficher le comptage Hi-Lo des cartes sorties.</p>
+</dialog>
+
+<dialog id="pkRanksDlg" class="dlg">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Classement des mains</h2>
+  <table class="payouts ranks">
+    <tbody>
+      <tr><td>Quinte flush royale</td><td class="ex">A♠ R♠ D♠ V♠ 10♠</td></tr>
+      <tr><td>Quinte flush</td><td class="ex">9♥ 8♥ 7♥ 6♥ 5♥</td></tr>
+      <tr><td>Carré</td><td class="ex">7♣ 7♦ 7♥ 7♠ R♦</td></tr>
+      <tr><td>Full</td><td class="ex">D♠ D♥ D♦ 4♣ 4♠</td></tr>
+      <tr><td>Couleur</td><td class="ex">A♦ V♦ 9♦ 6♦ 2♦</td></tr>
+      <tr><td>Quinte</td><td class="ex">10♣ 9♦ 8♠ 7♥ 6♣</td></tr>
+      <tr><td>Brelan</td><td class="ex">8♠ 8♥ 8♦ R♣ 3♠</td></tr>
+      <tr><td>Double paire</td><td class="ex">V♣ V♦ 5♥ 5♠ A♣</td></tr>
+      <tr><td>Paire</td><td class="ex">10♥ 10♠ R♦ 7♣ 2♥</td></tr>
+      <tr><td>Carte haute</td><td class="ex">A♠ D♦ 9♣ 6♥ 3♠</td></tr>
+    </tbody>
+  </table>
+  <p class="muted small">Chaque joueur forme la meilleure main de 5 cartes avec ses 2 cartes privées et les 5 cartes communes. Le jeu est mélangé par le générateur cryptographique&nbsp;; les IA ne voient jamais vos cartes&nbsp;: elles estiment leurs chances par simulation (Monte-Carlo) à partir de ce qu'elles voient et de vos actions.</p>
+</dialog>
+
+<dialog id="pkSoloDlg" class="dlg">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Texas Hold'em contre l'IA</h2>
+  <div class="field">
+    <span class="field-label">Nombre d'adversaires</span>
+    <div class="seg" data-simple id="pkSoloOpp">
+      <button type="button" class="seg-btn" data-v="1">1</button>
+      <button type="button" class="seg-btn" data-v="2">2</button>
+      <button type="button" class="seg-btn" data-v="3">3</button>
+      <button type="button" class="seg-btn on" data-v="4">4</button>
+      <button type="button" class="seg-btn" data-v="5">5</button>
+    </div>
+  </div>
+  <div class="field">
+    <span class="field-label">Blindes (petite / grosse)</span>
+    <div class="seg" id="pkSoloBlinds"></div>
+  </div>
+  <div class="field">
+    <span class="field-label">Votre cave</span>
+    <input type="range" id="pkSoloBuyIn" aria-label="Cave">
+    <div class="field-out" id="pkSoloBuyInOut"></div>
+  </div>
+  <div class="field">
+    <span class="field-label">Niveau des IA</span>
+    <div class="seg" data-simple id="pkSoloDiff">
+      <button type="button" class="seg-btn" data-v="facile">Facile</button>
+      <button type="button" class="seg-btn on" data-v="normal">Normal</button>
+      <button type="button" class="seg-btn" data-v="difficile">Difficile</button>
+    </div>
+  </div>
+  <div class="dlg-actions"><button id="pkSoloGo" class="btn-primary" type="button">S'asseoir à la table</button></div>
+</dialog>
+
+<dialog id="pkCreateDlg" class="dlg">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Créer une table entre amis</h2>
+  <div class="field">
+    <span class="field-label">Votre pseudo</span>
+    <span class="input-wrap"><input id="pkCreateName" maxlength="16" placeholder="ex. Tom" autocomplete="nickname"></span>
+  </div>
+  <div class="field">
+    <span class="field-label">Blindes (petite / grosse)</span>
+    <div class="seg" id="pkCreateBlinds"></div>
+  </div>
+  <div class="field">
+    <span class="field-label">Votre cave</span>
+    <input type="range" id="pkCreateBuyIn" aria-label="Cave">
+    <div class="field-out" id="pkCreateBuyInOut"></div>
+  </div>
+  <div class="field">
+    <span class="field-label">Adversaires IA en plus de vos amis</span>
+    <div class="seg" data-simple id="pkCreateBots">
+      <button type="button" class="seg-btn" data-v="0">Aucun</button>
+      <button type="button" class="seg-btn" data-v="1">1</button>
+      <button type="button" class="seg-btn on" data-v="2">2</button>
+      <button type="button" class="seg-btn" data-v="3">3</button>
+      <button type="button" class="seg-btn" data-v="4">4</button>
+    </div>
+  </div>
+  <div class="field">
+    <span class="field-label">Niveau des IA</span>
+    <div class="seg" data-simple id="pkCreateDiff">
+      <button type="button" class="seg-btn" data-v="facile">Facile</button>
+      <button type="button" class="seg-btn on" data-v="normal">Normal</button>
+      <button type="button" class="seg-btn" data-v="difficile">Difficile</button>
+    </div>
+  </div>
+  <p class="muted small">Une fois la table créée, donnez le code affiché à vos amis. La partie tourne dans votre navigateur&nbsp;: gardez cette page ouverte tant que vous jouez. Chaque joueur choisit sa propre cave.</p>
+  <div class="dlg-actions"><button id="pkCreateGo" class="btn-primary" type="button">Créer la table</button></div>
+</dialog>
+
+<dialog id="pkJoinDlg" class="dlg">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Rejoindre une table</h2>
+  <div id="pkJoinStep1">
+    <div class="field">
+      <span class="field-label">Votre pseudo</span>
+      <span class="input-wrap"><input id="pkJoinName" maxlength="16" placeholder="ex. Léa" autocomplete="nickname"></span>
+    </div>
+    <div class="field">
+      <span class="field-label">Code de la table</span>
+      <span class="input-wrap"><input id="pkJoinCode" maxlength="8" placeholder="ex. K7PM2" autocomplete="off" class="code-input"></span>
+    </div>
+    <p class="muted small">Demandez le code à l'ami qui a créé la table. La connexion se fait directement entre vos deux navigateurs.</p>
+    <div class="dlg-actions"><button id="pkJoinConnect" class="btn-primary" type="button">Se connecter</button></div>
+  </div>
+  <div id="pkJoinStep2" hidden>
+    <p id="pkJoinInfo" class="join-info"></p>
+    <div class="field">
+      <span class="field-label">Votre cave</span>
+      <input type="range" id="pkJoinBuyIn" aria-label="Cave">
+      <div class="field-out" id="pkJoinBuyInOut"></div>
+    </div>
+    <div class="dlg-actions">
+      <button id="pkJoinBack" class="btn-ctl" type="button">Retour</button>
+      <button id="pkJoinGo" class="btn-primary" type="button">S'asseoir à la table</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="js/rng.js"></script>
+<script src="js/casino.js"></script>
+<script src="js/cards.js"></script>
+<script src="js/roulette.js"></script>
+<script src="js/blackjack.js"></script>
+<script src="js/poker-core.js"></script>
+<script src="js/poker-ui.js"></script>
+</body>
+</html>
