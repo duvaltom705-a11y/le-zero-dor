@@ -224,6 +224,16 @@
       this.checkReady();
       return '';
     }
+    /** Le joueur achète des jetons en plus, sans quitter la table (pris dans son portefeuille). */
+    addChips(id, amount) {
+      const p = this.get(id);
+      if (!p) return 'Vous n’êtes pas assis à cette table.';
+      amount = Math.floor(Number(amount));
+      if (!Number.isFinite(amount) || amount < 1 || amount > 100000) return 'Montant invalide (1 € à 100 000 €).';
+      p.stack = round2(p.stack + amount);
+      this.emit();
+      return '';
+    }
     setAuto(id, v) {
       const p = this.get(id);
       if (!p) return '';
@@ -250,6 +260,7 @@
         case 'rebet': return this.rebet(id);
         case 'ready': return this.setReady(id, m.v);
         case 'auto': return this.setAuto(id, m.v);
+        case 'add': return this.addChips(id, m.amount);
         default: return '';
       }
     }

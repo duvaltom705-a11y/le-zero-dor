@@ -66,6 +66,7 @@ const Blackjack = (() => {
       case 'welcome': return pick(LINES.welcome, s.i);
       case 'join': return other ? `${other} s’installe à la table. Bienvenue !` : pick(LINES.welcome, s.i);
       case 'leave': return s.name ? `${Net.cleanText(s.name, 16)} quitte la table.` : '';
+      case 'chips': return other ? `${other} achète ${money(Number(s.a) || 0)} de jetons.` : `Voici vos ${money(Number(s.a) || 0)} de jetons. Bonne chance !`;
       case 'shuffle': return 'Je mélange un nouveau sabot de 6 jeux…';
       case 'deal': return pick(LINES.deal, s.i);
       case 'ins':
@@ -489,12 +490,10 @@ const Blackjack = (() => {
       if (!ctrl || !m || m.stack >= 1 || m.bet > 0 || m.inRound || document.querySelector('dialog[open]')) return;
       bustShown = true;
       if (!isNet()) {
-        await infoBox('Plus de jetons',
-          '<p>Votre portefeuille est vide. Retournez au hall : vous pourrez le recharger à la caisse si vous souhaitez continuer.</p>',
-          'Retour au hall');
-        leave(true);
-      } else if (await confirmBox('Plus de jetons', '<p>Vous n’avez plus de jetons à cette table.</p>', 'Quitter la table', 'Rester regarder')) {
-        leave(true);
+        if (await confirmBox('Plus de jetons', '<p>Vous n’avez plus de jetons. Ajoutez-en à la caisse pour continuer à jouer, ou retournez au hall.</p>', 'Ajouter des jetons', 'Retour au hall')) openCash();
+        else leave(true);
+      } else if (await confirmBox('Plus de jetons', '<p>Vous n’avez plus de jetons à cette table. Vous pouvez en ajouter sans quitter la partie.</p>', 'Ajouter des jetons', 'Plus tard')) {
+        openCash();
       }
     }, 1600);
   }
@@ -546,6 +545,7 @@ const Blackjack = (() => {
     ctrl = {
       mode: 'solo',
       send: (m) => { const e = soloTable.apply('me', m); if (e) toast(e); },
+      addChips: async (v) => { const e = soloTable.addChips('me', v); return { ok: !e, msg: e }; },
       leave: async () => {
         const s = soloTable.removePlayer('me');
         return s === null ? { error: 'Terminez d’abord la main en cours.' } : { stack: s };
@@ -575,7 +575,11 @@ const Blackjack = (() => {
       },
       join: (id, name, stack) => (table.addPlayer({ id, name, stack }) < 0 ? 'La table est complète (5 joueurs).' : ''),
       view: (id) => table.view(id),
-      handle: (id, m) => { const e = table.apply(id, m); return e ? { t: 'err', msg: e } : null; },
+      handle: (id, m) => {
+        if (m.t === 'add') { const e = table.addChips(id, m.amount); return { t: 'added', ok: !e, msg: e }; }
+        const e = table.apply(id, m);
+        return e ? { t: 'err', msg: e } : null;
+      },
       setConnected: (id, ok) => table.setConnected(id, ok),
       leave: (id) => {
         const s = table.removePlayer(id);
@@ -593,6 +597,7 @@ const Blackjack = (() => {
     room = Net.host(peer, code, cfg.name, game, (v) => { if (ctrl === c) onView(v); });
     c.room = room;
     c.send = (m) => { const e = table.apply('host', m); if (e) toast(e); };
+    c.addChips = async (v) => { const e = table.addChips('host', v); return { ok: !e, msg: e }; };
     c.chat = (t) => room.chat(t);
     c.leave = async () => ({ stack: room.close() });
     ctrl = c;
@@ -615,6 +620,10 @@ const Blackjack = (() => {
       onAbort: () => { if (ctrl === c) { closeSession(); backToHall(); } },
     });
     c.send = (m) => g.send(m);
+    c.addChips = async (v) => {
+      const r = await g.request({ t: 'add', amount: v }, 'added');
+      return { ok: !!r.ok, msg: Net.cleanText(r.msg, 200) };
+    };
     c.chat = (t) => g.chat(t);
     c.leave = () => g.leave();
     ctrl = c;
@@ -679,6 +688,15 @@ const Blackjack = (() => {
   });
   $('#bjLeaveBtn').addEventListener('click', () => leave(false));
   $('#bjRulesBtn').addEventListener('click', () => $('#bjRulesDlg').showModal());
+  /** Caisse à la table : ajouter des jetons sans quitter la partie. */
+  function openCash() {
+    if (!ctrl || !ctrl.addChips) return;
+    TableCash.open({
+      amounts: [20, 50, 100, 500], min: 1, max: 100000,
+      add: (v) => (ctrl && ctrl.addChips ? ctrl.addChips(v) : Promise.resolve({ ok: false, msg: 'Vous n’êtes plus à la table.' })),
+    });
+  }
+  $('#bjCashBtn').addEventListener('click', openCash);
   $('#bjAdviceToggle').addEventListener('change', render);
   $('#bjCountToggle').addEventListener('change', render);
 

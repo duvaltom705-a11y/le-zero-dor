@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css?v=ad41c6d8">
-  <link rel="stylesheet" href="css/games.css?v=6a622102">
+  <link rel="stylesheet" href="css/games.css?v=c13ebaf9">
 </head>
 <body>
 
@@ -144,6 +144,7 @@
     </div>
     <div class="top-actions">
       <button class="btn-ghost icon sound-btn" type="button"></button>
+      <button id="rlCashBtn" class="btn-ghost" type="button">Caisse</button>
       <button id="infoBtn" class="btn-ghost" type="button">Règles &amp; hasard</button>
       <button id="leaveBtn" class="btn-ghost" type="button">← Hall</button>
     </div>
@@ -200,6 +201,7 @@
     </div>
     <div class="top-actions">
       <button class="btn-ghost icon sound-btn" type="button"></button>
+      <button id="bjCashBtn" class="btn-ghost" type="button">Caisse</button>
       <button id="bjRulesBtn" class="btn-ghost" type="button">Règles</button>
       <button id="bjLeaveBtn" class="btn-ghost" type="button">← Hall</button>
     </div>
@@ -281,6 +283,7 @@
     </div>
     <div class="top-actions">
       <button class="btn-ghost icon sound-btn" type="button"></button>
+      <button id="pkCashBtn" class="btn-ghost" type="button">Caisse</button>
       <button id="pkRanksBtn" class="btn-ghost" type="button">Mains</button>
       <button id="pkLeaveBtn" class="btn-ghost" type="button">Quitter la table</button>
     </div>
@@ -389,6 +392,18 @@
     <span class="input-wrap"><input id="cashierAmount" type="number" inputmode="numeric" min="10" max="100000" placeholder="Autre montant"><span class="suffix">€</span></span>
     <button id="cashierOk" class="btn-primary" type="button">Ajouter</button>
   </div>
+</dialog>
+
+<dialog id="tableCashDlg" class="dlg small">
+  <form method="dialog" class="dlg-close"><button aria-label="Fermer">×</button></form>
+  <h2>Ajouter des jetons</h2>
+  <p class="muted small">Ils s'ajoutent à votre tapis, sans quitter la table. Ils sont pris dans votre portefeuille (<b id="tcWallet"></b>)&nbsp;; s'il ne suffit pas, le complément est déposé à la caisse.</p>
+  <div class="amounts" id="tcAmounts"></div>
+  <div class="cashier-custom">
+    <span class="input-wrap"><input id="tcAmount" type="number" inputmode="numeric" placeholder="Autre montant"><span class="suffix">€</span></span>
+    <button id="tcOk" class="btn-primary" type="button">Ajouter</button>
+  </div>
+  <p id="tcNote" class="muted small tc-note" hidden></p>
 </dialog>
 
 <dialog id="infoDlg" class="dlg">
@@ -603,14 +618,14 @@
 </dialog>
 
 <script src="js/rng.js?v=ddd90cee"></script>
-<script src="js/casino.js?v=931135ce"></script>
+<script src="js/casino.js?v=0974e642"></script>
 <script src="js/net.js?v=d68d7c1e"></script>
 <script src="js/cards.js?v=0c133e07"></script>
-<script src="js/roulette-core.js?v=1b875d94"></script>
-<script src="js/roulette.js?v=b51d4418"></script>
-<script src="js/blackjack-core.js?v=9e1fdaed"></script>
-<script src="js/blackjack.js?v=16deba16"></script>
+<script src="js/roulette-core.js?v=82bca72d"></script>
+<script src="js/roulette.js?v=61b461a8"></script>
+<script src="js/blackjack-core.js?v=2d263b1e"></script>
+<script src="js/blackjack.js?v=267e59b5"></script>
 <script src="js/poker-core.js?v=7484a6d6"></script>
-<script src="js/poker-ui.js?v=443a97a7"></script>
+<script src="js/poker-ui.js?v=bb15625f"></script>
 </body>
 </html>

@@ -606,5 +606,23 @@ const PokerUI = (() => {
   $('#pkLeaveBtn').addEventListener('click', () => leave(false));
   $('#pkRanksBtn').addEventListener('click', () => $('#pkRanksDlg').showModal());
 
+  /** Caisse à la table : ajouter des jetons entre deux mains, sans quitter la table. */
+  function openCash() {
+    if (!ctrl || !ctrl.rebuy || !view) return;
+    const bb = view.baseBb || view.bb;
+    const me = view.you >= 0 ? view.seats[view.you] : null;
+    const playing = me && me.inHand && !me.folded && (view.phase === 'betting' || view.phase === 'streetEnd');
+    TableCash.open({
+      amounts: [bb * 20, bb * 50, bb * 100, bb * 200], min: bb * 10, max: bb * 200,
+      note: `Au poker : de ${money(bb * 10)} à ${money(bb * 200)} par ajout, entre deux mains (ou une fois couché)${playing ? '. Attendez la fin de cette main.' : '.'}`,
+      add: async (v) => {
+        if (!ctrl || !ctrl.rebuy) return { ok: false, msg: 'Vous n’êtes plus à la table.' };
+        const ok = await ctrl.rebuy(v);
+        return { ok: ok !== false, msg: 'Vous pourrez ajouter des jetons à la fin de la main.' };
+      },
+    });
+  }
+  $('#pkCashBtn').addEventListener('click', openCash);
+
   return { openSolo };
 })();

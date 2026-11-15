@@ -331,6 +331,68 @@ function addFunds(v) {
   toast(`${money(v)} ajoutés à votre portefeuille.`, 'ok');
 }
 
+// ---------------------------------------------------------------
+// Caisse à la table : ajouter des jetons sans quitter la partie
+// Les jetons sont pris dans le portefeuille ; s'il ne suffit pas,
+// le complément est déposé à la caisse (comme depuis le hall).
+// ---------------------------------------------------------------
+const TableCash = (() => {
+  const dlg = $('#tableCashDlg');
+  let cfg = null;
+  let busy = false;
+
+  /** cfg = { amounts: [..], min, max, note, add(amount) → Promise<{ ok, msg }> } */
+  function open(c) {
+    cfg = c;
+    busy = false;
+    $('#tcWallet').textContent = money(Wallet.balance);
+    $('#tcAmounts').innerHTML = cfg.amounts.map((a) => `<button type="button" class="amount" data-add="${a}">+${money(a)}</button>`).join('');
+    const inp = $('#tcAmount');
+    inp.value = '';
+    inp.min = String(cfg.min);
+    inp.max = String(cfg.max);
+    $('#tcNote').textContent = cfg.note || '';
+    $('#tcNote').hidden = !cfg.note;
+    dlg.showModal();
+  }
+
+  async function add(v) {
+    if (busy || !cfg) return;
+    if (!Number.isInteger(v) || v < cfg.min || v > cfg.max) {
+      toast(`Choisissez un montant entier entre ${money(cfg.min)} et ${money(cfg.max)}.`);
+      return;
+    }
+    busy = true;
+    for (const b of $$('#tableCashDlg button')) b.disabled = true;
+    // Complément déposé à la caisse si le portefeuille ne suffit pas
+    const deposit = Math.max(0, Math.ceil(v - Wallet.balance));
+    if (deposit) { Wallet.buyIn += deposit; Wallet.give(deposit); }
+    Wallet.take(v);
+    let r;
+    try { r = await cfg.add(v); } catch (e) { r = { ok: false, msg: e.message }; }
+    busy = false;
+    for (const b of $$('#tableCashDlg button')) b.disabled = false;
+    if (!r || !r.ok) {
+      // Rien n'a été ajouté : le portefeuille redevient comme avant
+      Wallet.give(v);
+      if (deposit) { Wallet.take(deposit); Wallet.buyIn -= deposit; }
+      toast((r && r.msg) || 'Impossible d’ajouter des jetons pour le moment.');
+      return;
+    }
+    if (dlg.open) dlg.close();
+    toast(`${money(v)} de jetons ajoutés à votre tapis${deposit ? ` (dont ${money(deposit)} déposés à la caisse)` : ''}.`, 'ok');
+  }
+
+  $('#tcAmounts').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-add]');
+    if (b) add(Number(b.dataset.add));
+  });
+  $('#tcOk').addEventListener('click', () => add(Number($('#tcAmount').value)));
+  $('#tcAmount').addEventListener('keydown', (e) => { if (e.key === 'Enter') add(Number($('#tcAmount').value)); });
+
+  return { open };
+})();
+
 // Quitter le casino
 $('#exitBtn').addEventListener('click', async () => {
   const net = Wallet.balance - Wallet.buyIn;

@@ -356,6 +356,17 @@
       this.poke();
       return '';
     }
+    /** Le joueur achète des jetons en plus, sans quitter la table (pris dans son portefeuille). */
+    addChips(id, amount) {
+      const p = this.get(id);
+      if (!p) return 'Vous n’êtes pas assis à cette table.';
+      amount = Math.floor(Number(amount));
+      if (!Number.isFinite(amount) || amount < 1 || amount > 100000) return 'Montant invalide (1 € à 100 000 €).';
+      p.stack = round2(p.stack + amount);
+      if (this.phase === 'betting' && this.o.seats > 1) this.talk('chips', { s: p.seat, a: amount });
+      this.emit();
+      return '';
+    }
     legalFor(p, h) {
       if (!h || h.done) return {};
       const two = h.cards.length === 2;
@@ -386,6 +397,7 @@
         case 'ready': return this.ready(id);
         case 'ins': return this.insure(id, !!m.take);
         case 'act': return this.act(id, String(m.kind));
+        case 'add': return this.addChips(id, m.amount);
         default: return '';
       }
     }
