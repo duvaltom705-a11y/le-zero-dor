@@ -10,3 +10,5 @@ Un petit casino en ligne avec des **jetons virtuels** (aucun argent réel) : rou
 Le site est entièrement statique : il suffit d'ouvrir `index.html`. Le jeu entre amis utilise WebRTC via [PeerJS](https://peerjs.com) : le navigateur de celui qui crée la table fait tourner la partie, et le serveur public de PeerJS sert uniquement à mettre les navigateurs en relation.
 
 Les moteurs de jeu (`js/*-core.js`) n'utilisent pas le navigateur et peuvent être testés avec Node.
+
+Avant chaque mise en ligne, lancer `python3 outils/versionner.py` : il ajoute une empreinte à chaque fichier CSS/JS appelé par `index.html`, pour que les navigateurs ne gardent pas d'anciennes versions en cache.
