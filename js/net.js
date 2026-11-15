@@ -22,10 +22,14 @@ const P2P = {
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
     { urls: 'stun:stun.cloudflare.com:3478' },
   ],
-  // Relais TURN : indispensables quand une connexion directe est impossible
-  // (4G/5G, certains réseaux d'entreprise). À remplir avec les identifiants
-  // d'un service TURN, ex. { urls: 'turn:…:3478', username: '…', credential: '…' }.
-  TURN: [],
+  // Relais TURN (ExpressTURN, offre gratuite) : indispensable quand une connexion
+  // directe est impossible (4G/5G, certains réseaux d'entreprise). Les messages
+  // du jeu passent alors par ce serveur. En TCP aussi, pour les réseaux qui bloquent l'UDP.
+  TURN: [{
+    urls: ['turn:free.expressturn.com:3478', 'turn:free.expressturn.com:3478?transport=tcp'],
+    username: '000000002110202995',
+    credential: 'zdG6L1r8Vzl2r/k95G5aQPC9wWs=',
+  }],
   iceConfig() { return { iceServers: this.STUN.concat(this.TURN) }; },
 
   /** Charge la bibliothèque PeerJS à la demande (il faut une connexion Internet). */
@@ -108,8 +112,8 @@ const P2P = {
   },
 
   /** Message quand les deux navigateurs se voient mais ne parviennent pas à se relier. */
-  NAT_MSG: 'Votre navigateur a bien trouvé la table, mais vos deux connexions Internet n’arrivent pas à se relier directement '
-    + '(fréquent en 4G/5G ou sur certains réseaux). Essayez avec les deux appareils en Wi-Fi.',
+  NAT_MSG: 'Votre navigateur a bien trouvé la table, mais la connexion n’a pas pu s’établir, même par le relais. '
+    + 'Vérifiez votre connexion Internet (ou essayez un autre réseau Wi-Fi), puis réessayez.',
 
   /** Connexion directe d'un invité à la table de code `code`. */
   dial(peer, code) {
