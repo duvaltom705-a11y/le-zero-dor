@@ -430,17 +430,52 @@ function addSpot(node, numbers, label, opts = {}) {
   node.dataset.key = key;
 }
 
+// Le tapis se dessine à l'horizontale (ordinateur, tablette) ou à la verticale sur téléphone : zéro en haut,
+// rangées 1-2-3 de haut en bas, colonnes « 2:1 » en bas, douzaines et chances simples sur le côté droit.
+// Chaque case garde sa place « horizontale » ; layoutBoard() la reporte dans l'un ou l'autre sens.
+const PHONE = window.matchMedia('(max-width: 640px)');
+const boardPlaces = [];
+
+function layoutBoard() {
+  const vert = PHONE.matches;
+  board.classList.toggle('vertical', vert);
+  for (const [e, kind, a, b, c, d] of boardPlaces) {
+    if (kind === 'grid') {
+      // lignes de grille horizontales : colonnes a → b, rangées c → d
+      if (!vert) {
+        e.style.gridColumn = `${a} / ${b}`;
+        e.style.gridRow = `${c} / ${d}`;
+      } else {
+        e.style.gridRow = `${a} / ${b}`;
+        // les trois rangées de numéros deviennent trois colonnes (1, 2, 3 de gauche à droite)
+        e.style.gridColumn = d <= 4 ? `${5 - d} / ${5 - c}` : `${c} / ${d}`;
+      }
+    } else if (kind === 'cell') {
+      // case numéro : colonne a (0 à 11), rangée b (0 = 3, 6, 9… en haut)
+      e.style.gridColumn = String(vert ? 3 - b : a + 1);
+      e.style.gridRow = String(vert ? a + 1 : b + 1);
+    } else {
+      // zone à cheval : centre (a, b) et taille (c, d) en cases ; un peu plus grande au doigt
+      const k = vert ? 1.25 : 1;
+      const [x, y, w, h, nx, ny] = vert ? [3 - b, a, d * k, c * k, 3, 12] : [a, b, c, d, 12, 3];
+      e.style.left = `${(x - w / 2) * 100 / nx}%`;
+      e.style.top = `${(y - h / 2) * 100 / ny}%`;
+      e.style.width = `${w * 100 / nx}%`;
+      e.style.height = `${h * 100 / ny}%`;
+    }
+  }
+}
+
 function buildBoard() {
+  const place = (e, c0, c1, r0, r1) => boardPlaces.push([e, 'grid', c0, c1, r0, r1]);
   const zero = el('div', 'cell num zero', '<span>0</span>');
-  zero.style.gridColumn = '1';
-  zero.style.gridRow = '1 / 4';
+  place(zero, 1, 2, 1, 4);
   board.append(zero);
   numberCells[0] = zero;
   addSpot(zero, [0], 'Plein 0');
 
   const area = el('div', 'numbers-area');
-  area.style.gridColumn = '2 / 14';
-  area.style.gridRow = '1 / 4';
+  place(area, 2, 14, 1, 4);
   board.append(area);
 
   const numAt = (c, r) => 3 * c + 3 - r; // r = 0 en haut (3, 6, 9…)
@@ -448,53 +483,48 @@ function buildBoard() {
     for (let r = 0; r < 3; r++) {
       const n = numAt(c, r);
       const cell = el('div', `cell num ${colorOf(n)}`, `<span>${n}</span>`);
-      cell.style.gridColumn = String(c + 1);
-      cell.style.gridRow = String(r + 1);
+      boardPlaces.push([cell, 'cell', c, r]);
       area.append(cell);
       numberCells[n] = cell;
       addSpot(cell, [n], `Plein ${n}`);
     }
   }
 
-  // Zones à cheval des lignes et coins (positions en % de la grille des numéros)
-  const CW = 100 / 12, CH = 100 / 3;
-  const VW = CW * 0.34, VH = CH * 0.6, HW = CW * 0.6, HH = CH * 0.3;
+  // Zones à cheval des lignes et coins (centre et taille en cases de la grille des numéros, 12 × 3)
+  const VW = 0.34, VH = 0.6, HW = 0.6, HH = 0.3;
   const hot = (cls, x, y, w, h, nums, label) => {
     const e = el('div', 'hot ' + cls);
-    e.style.left = `${x - w / 2}%`;
-    e.style.top = `${y - h / 2}%`;
-    e.style.width = `${w}%`;
-    e.style.height = `${h}%`;
+    boardPlaces.push([e, 'hot', x, y, w, h]);
     area.append(e);
     addSpot(e, nums, label);
   };
   for (let c = 0; c < 11; c++) for (let r = 0; r < 3; r++) {
     const n = numAt(c, r);
-    hot('split', (c + 1) * CW, (r + 0.5) * CH, VW, VH, [n, n + 3], `Cheval ${n}/${n + 3}`);
+    hot('split', c + 1, r + 0.5, VW, VH, [n, n + 3], `Cheval ${n}/${n + 3}`);
   }
   for (let c = 0; c < 12; c++) for (let r = 0; r < 2; r++) {
     const n = numAt(c, r);
-    hot('split', (c + 0.5) * CW, (r + 1) * CH, HW, HH, [n - 1, n], `Cheval ${n - 1}/${n}`);
+    hot('split', c + 0.5, r + 1, HW, HH, [n - 1, n], `Cheval ${n - 1}/${n}`);
   }
   for (let c = 0; c < 11; c++) for (let r = 0; r < 2; r++) {
     const n = numAt(c, r);
     const nums = [n - 1, n, n + 2, n + 3];
-    hot('corner', (c + 1) * CW, (r + 1) * CH, VW, HH, nums, `Carré ${nums.join('/')}`);
+    hot('corner', c + 1, r + 1, VW, HH, nums, `Carré ${nums.join('/')}`);
   }
   for (let c = 0; c < 12; c++) {
     const nums = [3 * c + 1, 3 * c + 2, 3 * c + 3];
-    hot('street', (c + 0.5) * CW, 100, HW, HH, nums, `Transversale ${nums.join('/')}`);
+    hot('street', c + 0.5, 3, HW, HH, nums, `Transversale ${nums.join('/')}`);
   }
   for (let c = 0; c < 11; c++) {
     const nums = [1, 2, 3, 4, 5, 6].map((k) => 3 * c + k);
-    hot('corner', (c + 1) * CW, 100, VW, HH, nums, `Sixain ${nums[0]} à ${nums[5]}`);
+    hot('corner', c + 1, 3, VW, HH, nums, `Sixain ${nums[0]} à ${nums[5]}`);
   }
   for (let r = 0; r < 3; r++) {
-    hot('split', 0, (r + 0.5) * CH, VW, VH, [0, 3 - r], `Cheval 0/${3 - r}`);
+    hot('split', 0, r + 0.5, VW, VH, [0, 3 - r], `Cheval 0/${3 - r}`);
   }
-  hot('corner', 0, CH, VW, HH, [0, 2, 3], 'Transversale 0/2/3');
-  hot('corner', 0, 2 * CH, VW, HH, [0, 1, 2], 'Transversale 0/1/2');
-  hot('corner', 0, 100, VW, HH, [0, 1, 2, 3], 'Carré 0/1/2/3');
+  hot('corner', 0, 1, VW, HH, [0, 2, 3], 'Transversale 0/2/3');
+  hot('corner', 0, 2, VW, HH, [0, 1, 2], 'Transversale 0/1/2');
+  hot('corner', 0, 3, VW, HH, [0, 1, 2, 3], 'Carré 0/1/2/3');
 
   // Colonnes
   for (let r = 0; r < 3; r++) {
@@ -502,16 +532,14 @@ function buildBoard() {
     const nums = [];
     for (let n = colNo; n <= 36; n += 3) nums.push(n);
     const e = el('div', 'cell outside colbet', '2:1');
-    e.style.gridColumn = '14';
-    e.style.gridRow = String(r + 1);
+    place(e, 14, 15, r + 1, r + 2);
     board.append(e);
     addSpot(e, nums, `Colonne ${colNo}`, { key: 'col' + colNo });
   }
   // Douzaines
   [['1 – 12', 'Premier 12'], ['13 – 24', 'Milieu 12'], ['25 – 36', 'Dernier 12']].forEach(([txt, sub], i) => {
-    const e = el('div', 'cell outside', `${txt}<small>${sub}</small>`);
-    e.style.gridColumn = `${2 + i * 4} / ${6 + i * 4}`;
-    e.style.gridRow = '4';
+    const e = el('div', 'cell outside dozen', `${txt}<small>${sub}</small>`);
+    place(e, 2 + i * 4, 6 + i * 4, 4, 5);
     board.append(e);
     const nums = Array.from({ length: 12 }, (_, k) => 12 * i + k + 1);
     addSpot(e, nums, `Douzaine ${txt.replace(' – ', ' à ')}`, { key: 'dz' + (i + 1) });
@@ -526,14 +554,16 @@ function buildBoard() {
     ['high', '19 – 36<small>Passe</small>', (n) => n >= 19, 'Passe (19 à 36)'],
   ];
   outs.forEach(([key, html, test, label], i) => {
-    const e = el('div', 'cell outside', html);
-    e.style.gridColumn = `${2 + i * 2} / ${4 + i * 2}`;
-    e.style.gridRow = '5';
+    const e = el('div', 'cell outside even-money', html);
+    place(e, 2 + i * 2, 4 + i * 2, 5, 6);
     board.append(e);
     const nums = [];
     for (let n = 1; n <= 36; n++) if (test(n)) nums.push(n);
     addSpot(e, nums, label, { key, even: true });
   });
+  layoutBoard();
+  if (PHONE.addEventListener) PHONE.addEventListener('change', layoutBoard);
+  else if (PHONE.addListener) PHONE.addListener(layoutBoard);
 }
 
 // ---------------------------------------------------------------
@@ -761,9 +791,31 @@ function tick() {
 // ---------------------------------------------------------------
 // Affichage
 // ---------------------------------------------------------------
+// Sur téléphone, le cylindre et le tapis ne tiennent pas sur le même écran : quand la bille part, on fait
+// défiler jusqu'au cylindre, puis on revient au tapis pour les mises suivantes (sauf si le joueur a bougé).
+let phoneScroll = null;
+function showWheelOnPhone() {
+  if (!PHONE.matches) return;
+  const r = $('#wheelWrap').getBoundingClientRect();
+  if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+  const from = window.scrollY;
+  $('#wheelWrap').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const mark = { from, to: null };
+  phoneScroll = mark;
+  setTimeout(() => { if (phoneScroll === mark) mark.to = window.scrollY; }, 1200);
+}
+function backToBoardOnPhone() {
+  const p = phoneScroll;
+  phoneScroll = null;
+  if (!p || p.to == null || Math.abs(window.scrollY - p.to) > 60) return;
+  window.scrollTo({ top: p.from, behavior: 'smooth' });
+}
+
 function onView(v) {
+  const was = view ? view.phase : null;
   view = v;
   if (v.phase === 'betting') deadlineAt = performance.now() + (Number(v.deadlineMs) || 0);
+  if (v.phase === 'betting' && was && was !== 'betting') backToBoardOnPhone();
   // Nouveau tirage : la bille est lancée (même durée chez tous les joueurs)
   if (v.spin && v.spin.id !== animSpin) {
     animSpin = v.spin.id;
@@ -771,6 +823,7 @@ function onView(v) {
     $('#resultBadge').hidden = true;
     if (v.phase === 'spinning' && v.spin.elapsedMs < 1500) {
       Wheel.launch(v.spin.result, { Ta: Number(v.spin.Ta), Tb: Number(v.spin.Tb) });
+      showWheelOnPhone();
     } else {
       Wheel.reset(); // arrivé en cours de tour : la bille apparaîtra avec le résultat
     }
@@ -869,7 +922,7 @@ function checkBust(v, me) {
 
 // Survol : surligne les numéros couverts et indique le paiement
 let hoverKey = null;
-const DEFAULT_INFO = 'Survolez le tapis pour voir chaque mise et ce qu\'elle paie.';
+const DEFAULT_INFO = '<span class="only-mouse">Survolez le tapis pour voir chaque mise et ce qu\'elle paie.</span><span class="only-touch">Touchez une case pour y poser un jeton : la mise et ce qu\'elle paie s\'affichent ici.</span>';
 function setHover(key) {
   if (key === hoverKey) return;
   if (hoverKey) {
@@ -880,7 +933,7 @@ function setHover(key) {
     for (const n of spots.get(key).numbers) numberCells[n].classList.add('hl');
     showSpotInfo(key);
   } else {
-    $('#betInfo').textContent = DEFAULT_INFO;
+    $('#betInfo').innerHTML = DEFAULT_INFO;
   }
 }
 function showSpotInfo(key) {
@@ -904,6 +957,8 @@ board.addEventListener('contextmenu', (e) => {
   e.preventDefault();
   removeBet(t.dataset.key);
 });
+// au doigt : appui long = retirer la mise (comme le clic droit)
+longPress(board, '[data-key]', (t) => removeBet(t.dataset.key));
 board.addEventListener('mouseover', (e) => {
   const t = e.target.closest('[data-key]');
   setHover(t ? t.dataset.key : null);
@@ -986,7 +1041,7 @@ function openTable(stack) {
   markChip();
   if (isNet()) Net.mountPanel($('#rlNetSlot'), ctrl);
   else Net.hidePanel();
-  $('#betInfo').textContent = DEFAULT_INFO;
+  $('#betInfo').innerHTML = DEFAULT_INFO;
   showScreen('roulette');
   clearInterval(ticker);
   ticker = setInterval(tick, 200);
@@ -1226,7 +1281,7 @@ Net.register('roulette', {
 buildBoard();
 buildChips();
 renderStats([]);
-$('#betInfo').textContent = DEFAULT_INFO;
+$('#betInfo').innerHTML = DEFAULT_INFO;
 
 return { enter, leave };
 })();

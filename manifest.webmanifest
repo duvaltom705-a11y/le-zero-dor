@@ -1,0 +1,16 @@
+{
+  "name": "Le Zéro d'Or · Casino",
+  "short_name": "Zéro d'Or",
+  "description": "Casino en jetons virtuels : roulette, blackjack et poker, seul ou entre amis.",
+  "lang": "fr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#04170e",
+  "theme_color": "#04170e",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

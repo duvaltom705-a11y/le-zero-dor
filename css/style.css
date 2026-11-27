@@ -387,3 +387,71 @@ h1 {
 
 /* Chiffres alignés pour Playfair (après les raccourcis « font », qui les réinitialisent) */
 .brand-mark span, .brand-small, .num span, .result-badge, .announce-main { font-variant-numeric: lining-nums; }
+
+/* ======================= TÉLÉPHONES (iPhone, Android) ======================= */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body { -webkit-tap-highlight-color: transparent; }
+/* pas de double-toucher pour zoomer sur les commandes : chaque toucher compte tout de suite */
+button, input, label, select, .cell, .hot, .chip, .bj-spot, [data-spot] { touch-action: manipulation; }
+.board, .bj-seats { -webkit-touch-callout: none; }
+/* hauteur réelle de l'écran (sans la barre d'adresse) et zones protégées (encoche, barre d'accueil) */
+#lobby.active {
+  min-height: 100dvh;
+  padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+}
+.screen.game.active { min-height: 100dvh; padding-bottom: env(safe-area-inset-bottom); }
+.topbar {
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-left: max(24px, env(safe-area-inset-left));
+  padding-right: max(24px, env(safe-area-inset-right));
+}
+
+/* textes d'aide : souris ou doigt */
+.only-touch { display: none; }
+@media (hover: none), (pointer: coarse) {
+  .only-touch { display: inline; }
+  .only-mouse { display: none; }
+  .btn-ctl kbd, .btn-spin kbd { display: none; } /* raccourcis clavier inutiles au doigt */
+}
+
+/* tapis vertical (layoutBoard dans roulette.js) */
+.board.vertical {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, .8fr) minmax(0, .8fr);
+  grid-template-rows: 48px repeat(12, 38px) 36px;
+  min-width: 0;
+}
+.board.vertical .numbers-area { grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(12, 1fr); }
+.board.vertical .num.zero { border-radius: 50% 50% 0 0 / 100% 100% 0 0; }
+.board.vertical .num span { font-size: 17px; }
+.board.vertical .dozen, .board.vertical .even-money { writing-mode: vertical-rl; }
+.board.vertical .outside small { margin: 0; margin-block-start: 4px; }
+.board.vertical .diamond { width: 22px; height: 36px; }
+
+@media (max-width: 640px) {
+  /* bandeau du haut sur deux lignes : pastille + boutons, puis les compteurs */
+  .topbar {
+    gap: 8px 10px;
+    padding: max(8px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left));
+  }
+  .brand-small { font-size: 0; gap: 0; }
+  .brand-small .dot { font-size: 15px; }
+  .top-actions { display: flex; gap: 6px; }
+  .wide-only { display: none; }
+  /* iOS agrandit la page quand on touche un champ écrit en moins de 16 px (les autres font déjà 16 à 18 px) */
+  body .invite input, body .chat-form input, body .pk-slider input[type="number"] { font-size: 16px; }
+
+  /* roulette : cylindre plus petit, puis le tapis, avec les jetons toujours à portée de pouce */
+  #roulette .layout { display: flex; flex-direction: column; align-items: stretch; gap: 14px; padding: 12px 12px 24px; }
+  #roulette .wheel-col, #roulette .board-col { display: contents; }
+  #roulette .wheel-wrap { order: 1; max-width: 250px; }
+  #roulette .announce { order: 2; min-height: 0; }
+  #rlNetSlot { order: 3; }
+  #roulette .board-scroll { order: 4; margin: 0; padding: 0; overflow: visible; }
+  #betInfo { order: 5; }
+  #roulette .chip-tray { order: 6; position: sticky; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 15; }
+  #roulette .chips { background: rgba(2, 14, 8, .92); box-shadow: 0 8px 24px rgba(0,0,0,.55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  #roulette .controls { order: 7; }
+  #roulette .auto-rebet { order: 8; }
+  #roulette .hint { order: 9; }
+  #roulette .panel { order: 10; }
+}

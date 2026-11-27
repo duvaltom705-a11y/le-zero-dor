@@ -351,8 +351,8 @@ const Blackjack = (() => {
         b.classList.toggle('dim', Number(b.dataset.value) > me.stack);
       }
       $('#bjBetHint').innerHTML = isNet()
-        ? 'Cliquez sur un jeton ou sur votre cercle pour miser · Clic droit sur le cercle&nbsp;: effacer · La donne part quand tous les joueurs sont prêts'
-        : 'Cliquez sur un jeton ou sur le cercle pour miser · Clic droit sur le cercle&nbsp;: effacer · <kbd>Entrée</kbd>&nbsp;: distribuer';
+        ? '<span class="only-mouse">Cliquez sur un jeton ou sur votre cercle pour miser · Clic droit sur le cercle&nbsp;: effacer</span><span class="only-touch">Touchez un jeton ou votre cercle pour miser · Appui long sur le cercle&nbsp;: effacer</span> · La donne part quand tous les joueurs sont prêts'
+        : '<span class="only-mouse">Cliquez sur un jeton ou sur le cercle pour miser · Clic droit sur le cercle&nbsp;: effacer · <kbd>Entrée</kbd>&nbsp;: distribuer</span><span class="only-touch">Touchez un jeton ou le cercle pour miser · Appui long sur le cercle&nbsp;: effacer</span>';
     }
     if (canIns) $('#bjInsYes').textContent = `Assurance (${money(me.hands[0].bet / 2)})`;
     const L = (v.me && v.me.legal) || {};
@@ -677,6 +677,7 @@ const Blackjack = (() => {
     e.preventDefault();
     send({ t: 'clear' });
   });
+  longPress($('#bjSeats'), '[data-spot]', () => send({ t: 'clear' })); // au doigt : appui long = effacer
   $('#bjDealBtn').addEventListener('click', ready);
   $('#bjClearBtn').addEventListener('click', () => send({ t: 'clear' }));
   $('#bjRebetBtn').addEventListener('click', () => send({ t: 'rebet' }));

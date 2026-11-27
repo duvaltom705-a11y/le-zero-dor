@@ -2,12 +2,23 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Le Zéro d'Or · Casino</title>
+  <meta name="description" content="Casino en jetons virtuels : roulette, blackjack et poker, seul ou entre amis.">
+  <meta name="theme-color" content="#04170e">
+  <!-- Téléphone : « Sur l'écran d'accueil » (iPhone) ou « Installer l'application » (Android) -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Zéro d'Or">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;0,800;1,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=ad41c6d8">
+  <link rel="stylesheet" href="css/style.css?v=75e76004">
   <link rel="stylesheet" href="css/games.css?v=c13ebaf9">
 </head>
 <body>
@@ -145,7 +156,7 @@
     <div class="top-actions">
       <button class="btn-ghost icon sound-btn" type="button"></button>
       <button id="rlCashBtn" class="btn-ghost" type="button">Caisse</button>
-      <button id="infoBtn" class="btn-ghost" type="button">Règles &amp; hasard</button>
+      <button id="infoBtn" class="btn-ghost" type="button">Règles<span class="wide-only"> &amp; hasard</span></button>
       <button id="leaveBtn" class="btn-ghost" type="button">← Hall</button>
     </div>
   </header>
@@ -185,7 +196,7 @@
         <button id="spinBtn" class="btn-spin" type="button">Lancer la bille</button>
       </div>
       <label class="switch auto-rebet"><input type="checkbox" id="rlAuto"> Rejouer automatiquement mes mises à chaque tour</label>
-      <p class="hint">La bille part toute seule à la fin du compte à rebours · Clic&nbsp;: poser un jeton · Clic droit&nbsp;: retirer la mise · Visez les lignes et les coins des cases pour jouer à cheval, en transversale, en carré ou en sixain · <kbd>Espace</kbd>&nbsp;: lancer tout de suite</p>
+      <p class="hint">La bille part toute seule à la fin du compte à rebours · <span class="only-mouse">Clic&nbsp;: poser un jeton · Clic droit&nbsp;: retirer la mise</span><span class="only-touch">Toucher&nbsp;: poser un jeton · Appui long&nbsp;: retirer la mise</span> · Visez les lignes et les coins des cases pour jouer à cheval, en transversale, en carré ou en sixain<span class="only-mouse"> · <kbd>Espace</kbd>&nbsp;: lancer tout de suite</span></p>
     </section>
   </main>
 </section>
@@ -285,7 +296,7 @@
       <button class="btn-ghost icon sound-btn" type="button"></button>
       <button id="pkCashBtn" class="btn-ghost" type="button">Caisse</button>
       <button id="pkRanksBtn" class="btn-ghost" type="button">Mains</button>
-      <button id="pkLeaveBtn" class="btn-ghost" type="button">Quitter la table</button>
+      <button id="pkLeaveBtn" class="btn-ghost" type="button">Quitter<span class="wide-only"> la table</span></button>
     </div>
   </header>
 
@@ -618,13 +629,13 @@
 </dialog>
 
 <script src="js/rng.js?v=ddd90cee"></script>
-<script src="js/casino.js?v=0974e642"></script>
+<script src="js/casino.js?v=55d0c546"></script>
 <script src="js/net.js?v=d68d7c1e"></script>
 <script src="js/cards.js?v=0c133e07"></script>
 <script src="js/roulette-core.js?v=82bca72d"></script>
-<script src="js/roulette.js?v=61b461a8"></script>
+<script src="js/roulette.js?v=8f713f1f"></script>
 <script src="js/blackjack-core.js?v=2d263b1e"></script>
-<script src="js/blackjack.js?v=267e59b5"></script>
+<script src="js/blackjack.js?v=d55ff375"></script>
 <script src="js/poker-core.js?v=7484a6d6"></script>
 <script src="js/poker-ui.js?v=bb15625f"></script>
 </body>

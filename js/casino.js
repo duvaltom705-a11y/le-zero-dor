@@ -21,6 +21,48 @@ const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ESC[c]);
 const netClass = (x) => (x > 0 ? 'pos' : x < 0 ? 'neg' : '');
 
+/** Écran tactile : un appui long sur un élément de `container` qui correspond à `selector` vaut un clic
+ *  droit. Le relâchement qui suit n'est pas compté comme un clic, et le menu du téléphone ne s'ouvre pas. */
+function longPress(container, selector, fn) {
+  let timer = 0, start = null, target = null, fired = false;
+  const cancel = () => { clearTimeout(timer); timer = 0; start = null; };
+  const fire = () => {
+    clearTimeout(timer);
+    timer = 0;
+    fired = true;
+    if (navigator.vibrate) navigator.vibrate(15);
+    fn(target);
+  };
+  container.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse') return;
+    const t = e.target.closest(selector);
+    if (!t || !container.contains(t)) return;
+    fired = false;
+    target = t;
+    start = { x: e.clientX, y: e.clientY };
+    clearTimeout(timer);
+    timer = setTimeout(fire, 480);
+  });
+  container.addEventListener('pointermove', (e) => {
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) cancel();
+  });
+  container.addEventListener('pointerup', cancel);
+  container.addEventListener('pointercancel', () => { if (!fired) cancel(); });
+  // Android déclenche aussi « contextmenu » à l'appui long : une seule suppression, sans menu
+  container.addEventListener('contextmenu', (e) => {
+    if (!timer && !fired) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (timer) fire();
+  }, true);
+  container.addEventListener('click', (e) => {
+    if (!fired) return;
+    fired = false;
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+}
+
 // ---------------------------------------------------------------
 // Sons (Web Audio, purement décoratifs — n'influencent rien)
 // ---------------------------------------------------------------
@@ -105,6 +147,20 @@ const Sound = {
 
 const ICON_ON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
 const ICON_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m22 9-6 6"/><path d="m16 9 6 6"/></svg>';
+// iPhone et Android ne laissent jouer le son qu'après un geste de l'utilisateur : le premier toucher (ou la
+// première touche) ouvre le contexte audio avec un son muet, et chaque geste le réveille s'il s'est endormi.
+function unlockAudio() {
+  const ac = Sound.ac();
+  if (!ac || Sound.primed) return;
+  Sound.primed = true;
+  const src = ac.createBufferSource();
+  src.buffer = ac.createBuffer(1, 1, 22050);
+  src.connect(ac.destination);
+  src.start(0);
+}
+document.addEventListener('pointerdown', unlockAudio, { passive: true });
+document.addEventListener('keydown', unlockAudio);
+
 function renderSoundButtons() {
   for (const b of $$('.sound-btn')) {
     b.innerHTML = Sound.on ? ICON_ON : ICON_OFF;
